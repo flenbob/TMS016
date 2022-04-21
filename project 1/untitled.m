@@ -47,6 +47,9 @@ B = [B1 B2];
 %Regression to the mean:
 Xs = B*beta'+Z;
 
+
+
+aoisjdoiajsd
 figure(2)
 imagesc(reshape(Xs, [25 40]));
 colormap 'gray'
