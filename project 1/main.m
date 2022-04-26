@@ -1,6 +1,7 @@
 clear 
 clf
 close all
+
 %Load titan images in grayscale 0-1 format and plot
 img_titan = double(imread("titan.jpg"))/255;
 img_rosetta = double(rgb2gray(imread("rosetta.jpg")))/255;
@@ -15,13 +16,17 @@ imagesc(img_rosetta)
 title('Rosetta')
 colormap 'gray'
 
-p_c = 0.01;
-sz = 2000;
-reconstruction(img_titan, p_c, sz)
-reconstruction(img_rosetta, p_c, sz)
+p_c = 0.5;
+sz = 10000;
+reconstruction(img_titan, p_c, sz, 'Titan')
+reconstruction(img_rosetta, p_c, sz, 'Rosetta')
 
 %% FUNCTIONS
-function reconstruction(img, p_c, sz)
+function reconstruction(img, p_c, sz, img_name)
+
+    if nargin < 4
+        img_name = '';
+    end
     %Generate data of observed points and ones to predict
     [x_o, x_m, ind_o, ind_m] = generate_data(img, p_c);
     
@@ -61,15 +66,12 @@ function reconstruction(img, p_c, sz)
     e_o = x_o(1:sz) - mu_o(1:sz);
     
     %Fit variogram to residual of observed pixels to estimate parameters
-    emp_v = emp_variogram(loc_o(1:sz, :), e_o, 100);
+    n_bins = 100;
+    emp_v = emp_variogram(loc_o(1:sz, :), e_o, n_bins);
     lse = cov_ls_est(e_o, 'matern', emp_v, struct('nu', 1));
-    
+
     %Plot variogram
-%     mat_v = matern_variogram(emp_v.h, lse.sigma, lse.kappa, lse.nu, lse.sigma_e);    
-%     figure(2)
-%     plot(emp_v.h,mat_v)
-%     legend('observed pixels variogram')
-%     hold off
+    plot_variogram(lse, emp_v, img_name)
     
     %% GMRFs
     
@@ -114,7 +116,23 @@ function reconstruction(img, p_c, sz)
     imagesc(reshape(Recon_image,[m,n]) - img);
     title("Differences")
     axis image
+    sgtitle(img_name)
     colormap 'gray'
+end
+
+function plot_variogram(lse, emp_v, img_name)
+    %Plot fitted matern variogram from the binned variogram estimate
+    
+    %Matern variogram to estimated parameters
+    mat_v = matern_variogram(emp_v.h, lse.sigma, lse.kappa, lse.nu, lse.sigma_e);
+
+    figure
+    plot(emp_v.h, mat_v)
+    hold on
+    plot(emp_v.h, emp_v.variogram, '.')
+    title(img_name, 'Estimated matern variogram & Binned variogram estimate')
+    legend('Matern variogram', 'Binned variogram estimate')
+    hold off
 end
 
 function Recon_image = krig_img(Q, kappa, ind_o, ind_m, mu_o, mu_m, x_o)
