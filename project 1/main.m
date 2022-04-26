@@ -16,10 +16,10 @@ imagesc(img_rosetta)
 title('Rosetta')
 colormap 'gray'
 
-p_c = 0.5;
+%Percentage of missing pixels
+p_c = 0.50;
 sz = 10000;
-reconstruction(img_titan, p_c, sz, 'Titan')
-reconstruction(img_rosetta, p_c, sz, 'Rosetta')
+reconstruction(img_rosetta, 1-p_c, sz, 'Rosetta')
 
 %% FUNCTIONS
 function reconstruction(img, p_c, sz, img_name)
@@ -99,11 +99,41 @@ function reconstruction(img, p_c, sz, img_name)
     
     %Generate reconstructed image with estimated kappa
     Recon_image = krig_img(Q, lse.kappa, ind_o, ind_m, mu_o, mu_m, x_o);
+    Recon_image = reshape(Recon_image,[m,n]);
     
+%   %Get error value for n_recon kappas (temporary) 
+%     n_recon = 10;
+%     %vals = linspace(-1e-1, 1e-1, n_recon);
+%     vals = linspace(-0.4, 0.4, n_recon);
+%     error = zeros(n_recon, 1);
+%     %Generate n_recon different reconstructions and measure error
+%     for i = 1:n_recon
+%         Recon_image = krig_img(Q, lse.kappa+vals(i), ind_o, ind_m, mu_o, mu_m, x_o);
+%         error(i) = sum(abs(Recon_image - reshape(img, [m*n, 1])))
+%     end
+%     
+%     %Plot error vs kappa
+%     plot(lse.kappa+vals, error, '.')
+%     hold on
+%     plot(lse.kappa+vals, error)
+%     xline(lse.kappa)
+%     ylabel('Error')
+%     xlabel('Kappa')
+%     title('Attempt to find better solution than LSE')
+%     legend('Attempted kappa pts', 'trend', 'LSE kappa')
+%     hold off
+
+    %Plot for percentage of missing pixels (temporary)
+%     figure
+%     imagesc(Recon_image);
+%     title([num2str(100*(1-p_c)),'% missing pixels'])
+%     axis image
+%     colormap 'gray'
+
     %Plot reconstructed image, original image and differences
     figure
     subplot(1,3,1)
-    imagesc(reshape(Recon_image,[m,n]));
+    imagesc(Recon_image);
     title("Reconstructed Image");
     axis image
     
@@ -113,7 +143,7 @@ function reconstruction(img, p_c, sz, img_name)
     axis image
     
     subplot(1,3,3)
-    imagesc(reshape(Recon_image,[m,n]) - img);
+    imagesc(Recon_image - img);
     title("Differences")
     axis image
     sgtitle(img_name)
