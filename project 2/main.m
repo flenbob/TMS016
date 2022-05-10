@@ -2,59 +2,51 @@ clear
 close all
 load('permeability.mat')
 
-%Show image of horizontal permeability slice
-figure(1)
-imagesc(Y)
-colormap 'gray'
-
-%Reshape image
-[m, n] = size(Y);
-X = reshape(Y, [n*m 1]);
-
-%K-means
 k = 2;
-labels_km = kmeans(X, k);
+%Plot without noise
+segment_image(Y, k, 0, "no noise");
 
-%Gaussian mixture
-[params_gmm, ~] = normmix_sgd(X, k);
-[labels_gmm, p_gmm] = normmix_classify(X, params_gmm);
+%Plot with noise
+scale = 1;
+sigma_e = scale*randn(size(Y, 1)*size(Y, 2), 1);
 
-%Markov RF mixture
-[theta, alpha, beta, cl, p] = mrf_sgd(Y,k);
+segment_image(Y, k, sigma_e, "1 Sigma noise")
 
-%Neighborhood stencil and parameters
-N = [0 1 0;
-     1 0 1;
-     0 1 0];
-beta = beta*eye(k);
+segment_image(Y, k, 3*sigma_e, "3 Sigma noise")
 
-%Set a starting value
-x = randi(k,[m n]); 
-z0 = zeros(m,n,k);
-for i=1:m
-    for j=1:n
-        z0(i,j, x(i,j)) = 1;
-    end
+function segment_image(img, k, sigma_e, plot_title)
+    %Segment image into k classes and plot result for: 
+    % - Gaussian mixture model (gmm)
+    % - K-means (km)
+    % - Markov Random field model (mrf)
+    %, with a plot title passed to the function
+    [m, n] = size(img);
+    X = reshape(img, [m*n, 1]);
+    X = X + sigma_e; %add noise to image
+
+    %K-means
+    labels_km = kmeans(X, k);
+    
+    %Gaussian mixture
+    [params_gmm, ~] = normmix_sgd(X, k);
+    [labels_gmm, ~] = normmix_classify(X, params_gmm);
+    
+    %MRF mixture
+    [~, ~, ~, label_mrf, ~] = mrf_sgd(reshape(X, [m, n]), k);
+
+    %Plot all model label images
+    figure
+    subplot(3,1,1)
+    imagesc(reshape(labels_km, [m n]))
+    title('K-means labeling')
+    
+    subplot(3,1,2)
+    imagesc(reshape(labels_gmm, [m n]))
+    title('Gaussian mixture labeling')
+    
+    subplot(3,1,3)
+    imagesc(label_mrf)
+    title('Markov random field labeling')
+    sgtitle(plot_title)
+    colormap 'gray'
 end
-
-%Simulate z using Gibbs sampling
-[z, Mz,ll] = mrf_sim(z0,N,alpha,beta,100,0);
-labels_mrf = zeros(m,n);
-
-for i=1:k
-    labels_mrf = labels_mrf + i*(z(:,:,i) == 1);
-end
-
-%Plot all model label images
-subplot(3,1,1)
-imagesc(reshape(labels_km, [m n]))
-title('K-means labeling')
-
-subplot(3,1,2)
-imagesc(reshape(labels_gmm, [m n]))
-title('Gaussian mixture labeling')
-
-subplot(3,1,3)
-imagesc(reshape(labels_mrf, [m n]))
-title('Markov random field labeling')
-colormap 'gray'
