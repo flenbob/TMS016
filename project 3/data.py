@@ -7,39 +7,37 @@ import os
 
 def main():
     #Create face images of dim pixels
-    path_read = 'data/face_coords.txt'
-    path_write = 'data/faces'
+    #Copy face_coords.txt and place in same dir as folders '2002' and '2003'
+    #where face_coords.txt are all .txt files concatenated
+    path_read = '../FDDB/'
+    path_write = '../FDDB/faces'
     dim = (24,24)
     generate_face_data(path_read, path_write, dim)
     
 def generate_face_data(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
-    # Read text document in path_read
+    # Read text document in filepath path_read
     # for each image:
     #   for each face:
-    #       crop face, resize to dim pixels and save to path_write
+    #       crop face, resize to dim pixels and save to filepath path_write
     
-    img_cnt = 0
-    face_coords = open(path_read,'r')
+    face_coords = open(path_read+'face_coords.txt','r')
     lines = face_coords.readlines()
-    #Read through lines of text document
     for idx, line in enumerate(lines):
         #If image on current line
         if line[0:4] == ('2002' or '2003'):
-            
-            path = 'data/'+line[:-1]+'.jpg'
+            path = path_read+line[:-1]+'.jpg'
             img = cv2.imread(path, 0)
             n_faces = int(lines[idx+1])
             masks = lines[idx+2:idx+2+n_faces]
-            
+            img_id = line[line.index('_')+1:-1]
+        
             #Crop, resize and save all faces in image
             for idx, mask in enumerate(masks):
-                img_cnt += 1
                 masks[idx] = [float(i) for i in mask.split()[:-1]]
                 x, y, w, h = ellipse2rect(masks[idx])
                 img_crop = img[y:y+h, x:x+w]
-                dim = (24,24)
                 new_img = cv2.resize(img_crop, dim)
-                cv2.imwrite(f'{path_write}/face_img_{img_cnt}.png', new_img)
+                cv2.imwrite(f'{path_write}/face_img_{img_id}_{idx}.png', new_img)
          
 def ellipse2rect(ellipse_mask):
     #Convert ellipse mask to rectangle
