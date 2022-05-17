@@ -26,6 +26,7 @@ def negative_images(path_read: str, path_write: str, dim: tuple[int, int]) -> No
         img = Image.open(f'{path_read}/{image_path}')
         img = ImageOps.grayscale(img)
         w, h = img.size
+
         
         #Crop images
         img_1 = img.crop((0, 0, int(w/2), int(h/2)))
