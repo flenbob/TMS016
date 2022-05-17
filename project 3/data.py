@@ -26,32 +26,27 @@ def negative_images(path_read: str, path_write: str, dim: tuple[int, int]) -> No
         img = Image.open(f'{path_read}/{image_path}')
         img = ImageOps.grayscale(img)
         w, h = img.size
+        
+        #Crop images
         img_1 = img.crop((0, 0, int(w/2), int(h/2)))
         img_2 = img.crop((int(w/2), int(h/2), w, h))
-        
-        norm_1 = np.zeros(dim)
-        norm_2 = np.zeros(dim)
-        
+
+        #Resize images
         img_1 = img_1.resize(dim, Image.ANTIALIAS)
         img_2 = img_2.resize(dim, Image.ANTIALIAS)
         img_1 = np.array(img_1)
         img_2 = np.array(img_2)
         
+        #Normalize images
+        norm_1 = np.zeros(dim)
+        norm_2 = np.zeros(dim)
         img_1 = cv2.normalize(img_1, norm_1, 0, 255, cv2.NORM_MINMAX)
         img_2 = cv2.normalize(img_2, norm_2, 0, 255, cv2.NORM_MINMAX)
 
+        #Save images
         cv2.imwrite(f'{path_write}/{image_path}_{1}.png', img_1)
         cv2.imwrite(f'{path_write}/{image_path}_{2}.png', img_2)
 
-        #img_1.save(f'{path_write}/{image_path}_{1}.png')
-        #img_2.save(f'{path_write}/{image_path}_{2}.png')
-        
-        #img_1_crop = img[0:sz, 0:sz]
-        #img_2_crop = img[sz:2*sz, sz:2*sz]
-        #new_1_img = cv2.resize(img_1_crop, dim, interpolation = cv2.INTER_AREA)
-        #new_2_img = cv2.resize(img_2_crop, dim, interpolation = cv2.INTER_AREA)
-        #cv2.imwrite(f'{path_write}/{image_path}_{1}.png', new_1_img)
-        #cv2.imwrite(f'{path_write}/{image_path}_{2}.png', new_2_img)
 
 def positive_images(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
     # Read text document in filepath path_read
@@ -78,7 +73,13 @@ def positive_images(path_read: str, path_write: str, dim: tuple[int, int]) -> No
                 x, y, w, h = ellipse2rect(masks[idx])
                 img_crop = img[y:y+h, x:x+w]
                 new_img = cv2.resize(img_crop, dim, interpolation = cv2.INTER_AREA)
-                cv2.imwrite(f'{path_write}/face_img_{img_id}_{idx}.png', new_img)
+                
+                #Normalize image
+                norm = np.zeros(dim)
+                img = cv2.normalize(new_img, norm, 0, 255, cv2.NORM_MINMAX)
+                
+                #Save image
+                cv2.imwrite(f'{path_write}/face_img_{img_id}_{idx}.png', img)
          
 def ellipse2rect(ellipse_mask):
     #Convert ellipse mask to rectangle
