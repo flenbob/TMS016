@@ -11,45 +11,45 @@ def main():
     #Create face images of dim pixels
     #Copy face_coords.txt and place in same dir as folders '2002' and '2003'
     #where face_coords.txt are all .txt files concatenated
-    path_read = '../FDDB'
-    path_write = '../FDDB/faces'
+    path_read = '../faces_dataset/M'
+    path_write = '../faces_dataset/faces_cropped'
     dim = (24,24)
-    #positive_images(path_read, path_write, dim)
-    negative_images('../negative_imgs/images', '../neg_imgs', dim)
+    
+    #positive_images_school_photos(path_read, path_write, dim)
+    #positive_images_FDDB(path_read, path_write, dim)
+    negative_images_FDDB('../negative_imgs/images', '../neg_imgs', dim)
 
 
-def negative_images(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
+def negative_images_FDDB(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
     #Crop 2 square regions from a given image and then resize to 24x24
     for image_path in os.listdir(path_read):
         print(f'{path_read}/{image_path}')
         #img = cv2.imread(f'{path_read}/{image_path}', 0)
         img = Image.open(f'{path_read}/{image_path}')
         img = ImageOps.grayscale(img)
-        w, h = img.size
-
         
-        #Crop images
-        img_1 = img.crop((0, 0, int(w/2), int(h/2)))
-        img_2 = img.crop((int(w/2), int(h/2), w, h))
-
         #Resize images
-        img_1 = img_1.resize(dim, Image.ANTIALIAS)
-        img_2 = img_2.resize(dim, Image.ANTIALIAS)
-        img_1 = np.array(img_1)
-        img_2 = np.array(img_2)
+        img = img.resize(dim, Image.ANTIALIAS)
+        img = np.array(img)
         
         #Normalize images
-        norm_1 = np.zeros(dim)
-        norm_2 = np.zeros(dim)
-        img_1 = cv2.normalize(img_1, norm_1, 0, 255, cv2.NORM_MINMAX)
-        img_2 = cv2.normalize(img_2, norm_2, 0, 255, cv2.NORM_MINMAX)
+        norm = np.zeros(dim)
+        img = cv2.normalize(img, norm, 0, 255, cv2.NORM_MINMAX)
 
         #Save images
-        cv2.imwrite(f'{path_write}/{image_path}_{1}.png', img_1)
-        cv2.imwrite(f'{path_write}/{image_path}_{2}.png', img_2)
+        cv2.imwrite(f'{path_write}/{image_path}.png', img)
 
+def positive_images_school_photos(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
+    for image_path in os.listdir(path_read):
+        img = Image.open(f'{path_read}/{image_path}')
+        img = ImageOps.grayscale(img)
+        img = img.resize(dim, Image.ANTIALIAS)
+        img = np.array(img)
+        norm = np.zeros(dim)
+        img = cv2.normalize(img, norm, 0, 255, cv2.NORM_MINMAX)
+        cv2.imwrite(f'{path_write}/{image_path}.png', img)
 
-def positive_images(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
+def positive_images_FDDB(path_read: str, path_write: str, dim: tuple[int, int]) -> None:
     # Read text document in filepath path_read
     # for each image:
     #   for each face:
