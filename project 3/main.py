@@ -1,6 +1,6 @@
+from typing import Any
 from skimage.feature import haar_like_feature
 from skimage.transform import integral_image
-from matplotlib import image
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
@@ -8,76 +8,122 @@ import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
-import sys
+from sklearn.metrics import roc_curve
 from time import time
 import h5py
 import pandas as pd
 import pickle
-from sklearn.metrics import plot_confusion_matrix
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import math
 
 def main():
-    n_f = 162336
-    n_img = 500
-    with open('adaboost_classifier.pkl', 'rb') as f:
-        bdt = pickle.load(f)
+    T = [1, 5, 25, 25, 50, 50, 75]
+    FNR_thresh = 0.1
+    
+    X_pos, y_pos = read_hdf5('data/positive_test.hdf5')
+    X_neg, y_neg = read_hdf5('data/negative_test.hdf5')
+    X = np.concatenate((X_pos, X_neg))
+    y = np.concatenate((y_pos, y_neg))
+    print('Files loaded')
+    file_path = 'data/adaboost_classifiers_test.pkl'
+    train_adaboost_classifiers(FNR_thresh, T, X, y, file_path)
+    
+    
+def train_adaboost_classifiers(FNR_thresh: float, T: list, X: np.ndarray, y: np.ndarray, file_path: str) -> None:
+    # Input:
+    # FNR_thresh: Maximum False Negative Ratio threshold [0, 1]
+    # T: List of number of weak classifiers (WC) for each layer of strong classifier (SC)
+    # X: Matrix of haar features for each sample (image)
+    # y: array of correct binary classification
+    # file_path: Filepath including filename (ends with .pkl) (eg. folder1/folder2/file.pkl)
+    
+    # Returns:
+    # None, but saves all SC:s and their thresholds to .pkl file
+    
+    #Set initial value to start while-loop
+    TN = 1
+    FN = 1
+    FP = 1
+    
+    #Open file
+    file = open(file_path, 'wb')
+    while (TN and FN and FP) != 0:
+        for t in T:
+            print(f'Training SC with {t} WC:s....')
+            #SC with t WC:s
+            clf = AdaBoostClassifier(
+                DecisionTreeClassifier(criterion='gini', max_depth=1), 
+                algorithm="SAMME.R", 
+                n_estimators=t
+            )
+            #Train SC
+            clf.fit(X, y)
+            y_pred = clf.predict(X)
+            
+            #Find probability threshold to reduce FPR to 1%
+            print(np.shape(y_pred))
+            TN, FP, FN, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
+            FNR = FN/(FN+TP)
+            
+            #If only TP samples remains
+            if (FP and FN and TN) == 0:
+                break
         
-    #print(bdt.feature_importances_)
+            print(f'Before thresh, FNR: {FNR}')
+            #If probability threshold is not satisfied
+            thresh = 0.5
+            if FNR > FNR_thresh:
+                y_prob = clf.predict_proba(X)[:, 1]
+                FPR_list, TPR_list, threshold_list = roc_curve(y, y_prob)
+                FNR_list = 1 - TPR_list
+                thresh = threshold_FNR(FNR_list, threshold_list, FNR_thresh)
+            
+            #Predict labels with new threshold
+            y_pred = 1*(clf.predict_proba(X)[:,1] >= thresh)
+            print(f'New threshold: {thresh}')
         
-    #idx_sorted = np.argsort(bdt.feature_importances_)[::-1]
-    print(np.sum(bdt.feature_importances_))
-    #print(bdt.feature_importances_[idx_sorted][1:200])
-    #print(idx_sorted[1:200])
+            #Remove samples that are TN
+            TN_idx = []
+            for i in range(len(y_pred)):
+                if (y[i] == 0) and (y_pred[i] == 0):
+                    TN_idx.append(i)
+        
+            X = np.delete(X, TN_idx, axis=0)
+            y = np.delete(y, TN_idx)
+            y_pred = np.delete(y_pred, TN_idx)
+            
+            #Check confusion matrix
+            TN, FP, FN, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
+            print(f'TN: {TN}, FP: {FP}, FN: {FN}, TP: {TP}')
+            #Append SC and threshold to .pkl file
+            pickle.dump([clf, thresh], file)
+            
+    file.close()
+    print(f'Saved all SC:s and thresholds to: {file_path}')
     
-    # X_pos, y_pos = read_hdf5('data', 'positive')
-    # X_neg, y_neg = read_hdf5('data', 'negative')
-    # X = np.concatenate((X_pos, X_neg))
-    # y = np.concatenate((y_pos, y_neg))
-    # y_pred = bdt.predict(X)
-    # plot_confusion_matrix(bdt, X, y)
-    # plt.show()
     
-    # #Load haar features for negative and positive images
-    # img2haar_features('../pos_imgs_test_2', 'data', n_f, 1000, 'positive')
-    # img2haar_features('../neg_imgs_test_2', 'data', n_f, 1000, 'negative')
-    # X_pos, y_pos = read_hdf5('data', 'positive')
-    # X_neg, y_neg = read_hdf5('data', 'negative')
+def threshold_FNR(FNR_list: np.ndarray, threshold_list: np.ndarray, target_FNR: float) -> float:
+    #Find threshold that satisfies target false negative rate (FNR)
+    idx = 0
+    FNR = FNR_list[0]
+    #print(f'FNR list: {FNR_list}')
+    #print(f'Threshold list: {threshold_list}')
+    while FNR >= target_FNR:
+        idx += 1
+        FNR = FNR_list[idx]
     
-    # #Concatenate data and split into test and train data
-    # X = np.concatenate((X_pos, X_neg))
-    # y = np.concatenate((y_pos, y_neg))
-    # X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.25,
-    #                                                 random_state=0,
-    #                                                 stratify=y)
-    #print(bdt.score(X_test, y_test))
-    # print('saving classifier to file')
-    # with open('adaboost_classifier.pkl', 'wb') as f:
-    #     pickle.dump(bdt, f)
+    #Linearly approximate target threshold
+    left_FNR = FNR_list[idx-1]
+    right_FNR = FNR_list[idx]
+    left_threshold = threshold_list[idx-1]
+    right_threshold = threshold_list[idx]
     
-    # bdt.fit(X_train, y_train)
-    #print(bdt.score(X, y))
-    # idx_sorted = np.argsort(bdt.feature_importances_)[::-1]
-    # idx_sorted = idx_sorted[1:100]
-    # feature_imps = pd.Series(bdt.feature_importances_[idx_sorted], index=idx_sorted)
-    # fig, ax = plt.subplots()
-    # feature_imps.plot.bar(ax=ax)
-    # ax.set_title("Feature importances using MDI")
-    # ax.set_ylabel("Mean decrease in impurity")
-    # fig.tight_layout()
-    # print('before plot show')
-    # print(bdt.feature_importances_[0])
-    # plt.show()
+    print(f'Closest FNR: {FNR_list[idx]} at idx = {idx}, and threshold: {threshold_list[idx]}')
     
-def train_adaboost_classifier(X_train, y_train, n_estimators):
-    #Train adaboost classifier with n_estimators decision stumps
-    bdt = AdaBoostClassifier(
-        DecisionTreeClassifier(criterion='gini', max_depth=1), 
-        algorithm="SAMME", 
-        n_estimators=n_estimators
-    )
-    t_start = time.time()
-    bdt.fit(X_train, y_train)
-    print(f'Time to fit model: {time.time() - t_start}s')
-    return bdt  
+    ratio = (left_FNR-target_FNR)/(left_FNR-right_FNR)
+    target_thresh = left_threshold-(ratio*(left_threshold-right_threshold))
+    return target_thresh
+
 
 def img2haar_features(path_read: str, path_write: str, n_f: int, n_img: int, img_type: str) -> np.ndarray:
     #X: Haar feature for each image
@@ -107,11 +153,11 @@ def img2haar_features(path_read: str, path_write: str, n_f: int, n_img: int, img
     file.create_dataset('labels', data=y)
     file.close()
     
-def read_hdf5(path_read: str, img_type: str):
+def read_hdf5(path_read: str):
     #Read feature hdf5 file and return:
     #X: features for each image
     #y: labels for each image 
-    file = h5py.File(f'{path_read}/{img_type}.hdf5', 'r')
+    file = h5py.File(f'{path_read}', 'r')
     X = file['features'] 
     y = file['labels']
     X = np.array(X)
