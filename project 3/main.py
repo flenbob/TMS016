@@ -17,14 +17,11 @@ import matplotlib.pyplot as plt
 import math
 
 def main():
-    T = [1, 5, 25, 25, 50, 50, 75, 75, 100, 100, 200]
-    FNR_thresh = 0.01
-    
-    
+
     #img2haar_features('../neg_imgs', 'data', 162336, 1430, 'negative')
     
     X_pos, y_pos = read_feature_file('data/positive_test.hdf5')
-    X_neg, y_neg = read_feature_file('data/negative_school.hdf5')
+    X_neg, y_neg = read_feature_file('data/negative_test.hdf5')
     
     X_pos = X_pos
     y_pos = y_pos
@@ -95,7 +92,7 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
                 print(f'Training SC with {t} WC:s....')
                 clf, thresh, flag = cross_validate(clf, X, y, FNR_target, FPR_target, n_splits)
                 if not flag:
-                    #If we dont achieve rates, add WC:s to SC and train new model
+                    #If we do not achieve rates, add WC:s to SC and train new model
                     print(f'SC with {t} WC:s was not enough. Rerun with {t + math.ceil(t_rate)} WC:s.')
                     t += math.ceil(t_rate)
                     continue
@@ -104,19 +101,21 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
                 models.append((clf, thresh))
                 
                 #Run SC on dataset and delete TN and FN
-                y_pred = 1*(clf.predict_proba(X)[:,1] >= thresh)
+                y_pred = 1*(clf.predict_proba(X)[:,-1] >= thresh)
                 delete_idx = []
                 for i in range(len(y_pred)):
                     if ((y[i] == 0) and (y_pred[i] == 0)) or \
                         ((y[i] == 1) and (y_pred[i] == 0)):
                         delete_idx.append(i)
-            
+
+                print(f'Deleted {round(100*len(delete_idx)/len(y_pred), 2)}% of samples')
                 X = np.delete(X, delete_idx, axis=0)
                 y = np.delete(y, delete_idx)
                 y_pred = np.delete(y_pred, delete_idx)
         
                 #If the ratio of FP is too low, add more from negative dataset
                 _, FP, _, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
+                print(f'FP/TP = {FP/TP}')
                 if min_FP_ratio > FP/TP:
                     X_FP, last_visited = generate_FP_samples(min_FP_ratio*TP, models, file_path, last_visited)                
                     y_FP = np.array(len(X_FP)*[0])
@@ -128,6 +127,8 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
                 
                 #Append SC and threshold to .pkl file
                 print(f'Successfully generated layer: {len(models)}. SC with {t} WC:s')
+                print('----------------------')
+                
                 pickle.dump([clf, thresh], f)
 
 def generate_FP_samples(n_samples_req: int, models: list, file_path: str, last_visited: str) -> np.ndarray:
@@ -189,7 +190,7 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
     
     #Divide dataset into Kfold (train, test) and validation (train, test)
     i = 0
-    X_KFold, X_validate, y_KFold, y_validate, = train_test_split(X, y, train_size=0.75)
+    X_KFold, X_validate, y_KFold, y_validate, = train_test_split(X, y, train_size=0.75, shuffle=True)
     for train_idx, test_idx in skf.split(X_KFold, y_KFold):
         i += 1
         print(f'Fold {i}')
@@ -225,10 +226,21 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
     FNR_fold = np.array(FNR_fold)
     FPR_fold = np.array(FPR_fold)
     if (np.mean(FNR_fold) > FNR_target) or (np.mean(FPR_fold) > FPR_target):
-        y_prob = clf.predict_proba(X)[:, 1]
+        y_prob = clf.predict_proba(X)[:, -1]
         FPR_list, TPR_list, threshold_list = roc_curve(y, y_prob)
         FNR_list = 1 - TPR_list
-        thresh, FPR = optimize_threshold(FNR_list, FPR_list, threshold_list, FNR_target, plot=True)
+        thresh = optimize_threshold(FNR_list, FPR_list, threshold_list, FNR_target)
+        
+        #Use threshold to calculate FPR:
+        y_pred = 1*(clf_best.predict_proba(X_validate)[:,-1] >= thresh)
+        TN, FP, FN, TP = confusion_matrix(y_validate, y_pred, labels=[0,1]).ravel()
+        FPR = FP/(FP+TN)
+        FNR = FN/(FN+TP)
+        if math.isnan(FPR):
+            FPR = 0
+        if math.isnan(FNR):
+            FNR = 0
+                    
         if FPR > FPR_target:
             #Infeasible solution, does not achieve target rates.
             #Stop cross validation and add WC to SC instead
@@ -236,7 +248,7 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
             return clf_best, thresh, flag
         
     #Validate SC on validation set
-    y_pred = 1*(clf_best.predict_proba(X_validate)[:,1] >= thresh)
+    y_pred = 1*(clf_best.predict_proba(X_validate)[:,-1] >= thresh)
     TN, FP, FN, TP = confusion_matrix(y_validate, y_pred, labels=[0,1]).ravel()
     FNR = FN/(FN+TP)
     FPR = FP/(FP+TN)
@@ -248,6 +260,7 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
     if FPR > FPR_target and FNR > FNR_target:
         #Infeasible solution. Validation does not achieve target rates.
         #Stop cross validation and add WC to SC instead
+        
         flag = False
         return clf_best, thresh, flag
     
@@ -255,7 +268,7 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
     flag = True
     return clf_best, thresh, flag
         
-def optimize_threshold(FNR_list: np.ndarray, FPR_list: np.ndarray, threshold_list: np.ndarray, target_FNR: float, plot: bool) -> tuple[float, float]:
+def optimize_threshold(FNR_list: np.ndarray, FPR_list: np.ndarray, threshold_list: np.ndarray, target_FNR: float) -> float:
     #Find threshold that satisfies target false negative rate (FNR)
     idx = 0
     FNR = FNR_list[0]
@@ -272,34 +285,18 @@ def optimize_threshold(FNR_list: np.ndarray, FPR_list: np.ndarray, threshold_lis
     ratio = (left_FNR-target_FNR)/(left_FNR-right_FNR)
     target_thresh = left_threshold-(ratio*(left_threshold-right_threshold))
     
-    #Linearly approximate FPR at target threshold
-    idx = 0
-    threshold = threshold_list[0]
-    while threshold < target_thresh:
-        idx += 1
-        threshold = threshold_list[idx]
-    
-    left_threshold = threshold[idx-1]
-    right_threshold = threshold_list[idx]
-    left_FPR = FPR_list[idx-1]
-    right_FPR = FPR_list[idx]
-    
-    ratio = (left_threshold-target_thresh)/(left_threshold-right_threshold)
-    target_FPR = left_FPR-(ratio*(left_FPR-right_FPR))
-    
-    if plot:
-        #Plot threshold and acquired FPR for that target threshold
-        dfplot = pd.DataFrame({'Threshold':threshold_list, 
-            'False Positive Rate':FPR_list, 
-            'False Negative Rate': FNR_list})
+    # if plot:
+    #     #Plot threshold and acquired FPR for that target threshold
+    #     dfplot = pd.DataFrame({'Threshold':threshold_list, 
+    #         'False Positive Rate':FPR_list, 
+    #         'False Negative Rate': FNR_list})
 
-        ax=dfplot.plot(x='Threshold', y=['False Positive Rate',
-        'False Negative Rate'], figsize=(10,6))
-        ax.plot([target_thresh, target_thresh], [0,0.2]) #mark selected thresh
-        ax.plot([0, 0.2], [target_FPR, target_FPR])
-        plt.show()
+    #     ax=dfplot.plot(x='Threshold', y=['False Positive Rate',
+    #     'False Negative Rate'], figsize=(10,6))
+    #     ax.plot([target_thresh, target_thresh], [0,1]) #mark selected thresh
+    #     plt.show()
         
-    return target_thresh, target_FPR
+    return target_thresh
 
 def read_model_file(file_path:str) -> list:
     models = []
