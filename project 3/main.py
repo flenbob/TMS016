@@ -1,6 +1,4 @@
 from typing import Any
-from skimage.feature import haar_like_feature
-from skimage.transform import integral_image
 import numpy as np
 import cv2
 import os
@@ -15,30 +13,31 @@ from sklearn.model_selection import KFold,StratifiedKFold
 import pandas as pd
 import matplotlib.pyplot as plt
 import math
+from sklearn.utils import shuffle
 
 def main():
 
     #img2haar_features('../neg_imgs', 'data', 162336, 1430, 'negative')
     
-    X_pos, y_pos = read_feature_file('data/positive_test.hdf5')
-    X_neg, y_neg = read_feature_file('data/negative_test.hdf5')
+    X_pos, y_pos = read_feature_file('../positive_imgs.hdf5')
+    X_neg, y_neg = read_feature_file('../negative_imgs.hdf5')
     
-    X_pos = X_pos
-    y_pos = y_pos
-    
-    #X_neg = X_neg[751:1000]
-    #y_neg = y_neg[751:1000]
+    X_pos = X_pos[1:600]
+    y_pos = y_pos[1:600]
     
     X = np.concatenate((X_pos, X_neg))
     y = np.concatenate((y_pos, y_neg))
+    X, y = shuffle(X, y)
     print('files loaded')
+    print(f'dataset size: {len(y)}, with {len(y_pos)} positive and {len(y_neg)} negative')
     
     FNR_target = 0.01
     FPR_target = 0.4
-    file_path = 'abclf_test.pkl'
+    file_path = 'abclf.pkl'
+    file_path_neg = '../negative_imgs_datasets.hdf5'
     n_splits = 4
     
-    train_adaboost_classifiers(FNR_target, FPR_target, X, y, file_path, n_splits)
+    train_adaboost_classifiers(FNR_target, FPR_target, X, y, file_path, file_path_neg, n_splits)
       
 def cascade_classifier(img: np.ndarray, models: list) -> int:
     # Input:
@@ -60,7 +59,7 @@ def cascade_classifier(img: np.ndarray, models: list) -> int:
     return 1
 
 def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarray, \
-                               y: np.ndarray, file_path: str, n_splits: int) -> None:
+                               y: np.ndarray, file_path: str, file_path_neg: str, n_splits: int) -> None:
     # Input:
     # FNR_thresh: Maximum False Negative Ratio threshold [0, 1]
     # T: List of number of weak classifiers (WC) for each layer of strong classifier (SC)
@@ -75,7 +74,6 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
     models = [] #Initialize empty array of (classifier, threshold)
     t = 1 #Initial amount of WC:s in first SC
     t_rate = 0.41 #Constant which controls amount of WC:s to add to SC if it fails
-    score = 0
     score_thresh = 0.98 #Score threshold for termination
     last_visited = None #Initialize last visited dataset in negative dataset
     min_FP_ratio = 0.75 #min FP/TP share required for training of each SC
@@ -83,55 +81,61 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
     FNR_target = 0.01 #Target false negative rate for each SC
     with open(file_path, 'wb') as f:
         while True:
-                #SC and WC:s
-                clf = AdaBoostClassifier(
-                    DecisionTreeClassifier(criterion='gini', max_depth=1), 
-                    algorithm="SAMME.R", 
-                    n_estimators=t
-                )
-                print(f'Training SC with {t} WC:s....')
-                clf, thresh, flag = cross_validate(clf, X, y, FNR_target, FPR_target, n_splits)
-                if not flag:
-                    #If we do not achieve rates, add WC:s to SC and train new model
-                    print(f'SC with {t} WC:s was not enough. Rerun with {t + math.ceil(t_rate)} WC:s.')
-                    t += math.ceil(t_rate)
-                    continue
-                
-                #Else SC is accepted, append to list of models
-                models.append((clf, thresh))
-                
-                #Run SC on dataset and delete TN and FN
-                y_pred = 1*(clf.predict_proba(X)[:,-1] >= thresh)
-                delete_idx = []
-                for i in range(len(y_pred)):
-                    if ((y[i] == 0) and (y_pred[i] == 0)) or \
-                        ((y[i] == 1) and (y_pred[i] == 0)):
-                        delete_idx.append(i)
+            print(f'A total of {len(y)} samples')
+            #SC and WC:s
+            clf = AdaBoostClassifier(
+                DecisionTreeClassifier(criterion='gini', max_depth=1), 
+                algorithm="SAMME.R", 
+                n_estimators=t
+            )
+            print(f'Training SC with {t} WC:s....')
+            clf, thresh, flag = cross_validate(clf, X, y, FNR_target, FPR_target, n_splits)
+            if not flag:
+                #If we do not achieve rates, add WC:s to SC and train new model
+                print(f'SC with {t} WC:s was not enough. Rerun with {t + math.ceil(t_rate)} WC:s.')
+                t += math.ceil(t_rate)
+                continue
+            
+            #Else SC is accepted, append to list of models
+            models.append((clf, thresh))
+            
+            #Run SC on dataset and delete TN and FN
+            y_pred = 1*(clf.predict_proba(X)[:,-1] >= thresh)
+            delete_idx = []
+            for i in range(len(y_pred)):
+                if ((y[i] == 0) and (y_pred[i] == 0)) or \
+                    ((y[i] == 1) and (y_pred[i] == 0)):
+                    delete_idx.append(i)
 
-                print(f'Deleted {round(100*len(delete_idx)/len(y_pred), 2)}% of samples')
-                X = np.delete(X, delete_idx, axis=0)
-                y = np.delete(y, delete_idx)
-                y_pred = np.delete(y_pred, delete_idx)
-        
-                #If the ratio of FP is too low, add more from negative dataset
-                _, FP, _, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
-                print(f'FP/TP = {FP/TP}')
-                if min_FP_ratio > FP/TP:
-                    X_FP, last_visited = generate_FP_samples(min_FP_ratio*TP, models, file_path, last_visited)                
-                    y_FP = np.array(len(X_FP)*[0])
-                    
-                    #Add FP samples and labels to dataset
-                    X = np.concatenate((X, X_FP))
-                    y = np.concatenate((y, y_FP))
-                    print(f'FP/TP ratio = {FP/TP} was too low. Added {len(X_FP)} new negative samples.')
+            print(f'Deleted {round(100*len(delete_idx)/len(y_pred), 2)}% of samples')
+            X = np.delete(X, delete_idx, axis=0)
+            y = np.delete(y, delete_idx)
+            y_pred = np.delete(y_pred, delete_idx)
+    
+            #If the ratio of FP is too low, add more from negative dataset
+            _, FP, _, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
+            print(f'FP/TP = {FP/TP}')
+            if min_FP_ratio > FP/TP and last_visited != 'EOF':
+                X_FP, last_visited = generate_FP_samples(min_FP_ratio*TP, models, file_path_neg, last_visited)                
+                y_FP = np.array(len(X_FP)*[0])
                 
-                #Append SC and threshold to .pkl file
-                print(f'Successfully generated layer: {len(models)}. SC with {t} WC:s')
-                print('----------------------')
-                
-                pickle.dump([clf, thresh], f)
+                #Add FP samples and labels to dataset and shuffle them
+                X = np.concatenate((X, X_FP))
+                y = np.concatenate((y, y_FP))
+                X, y = shuffle(X, y)
+                print(f'FP/TP ratio = {FP/TP} was too low. Added {len(X_FP)} FP samples. Last visited dataset: {last_visited}')
 
-def generate_FP_samples(n_samples_req: int, models: list, file_path: str, last_visited: str) -> np.ndarray:
+            elif min_FP_ratio > FP/TP and last_visited == 'EOF':
+                print(f'No more FP samples to add from file.')
+            
+            #Append SC and threshold to .pkl file
+            print(f'Successfully generated layer: {len(models)}. SC with {t} WC:s')
+            print('----------------------')
+            
+            #Save SC to file
+            pickle.dump([clf, thresh], f)
+            
+def generate_FP_samples(min_FP: int, models: list, file_path: str, last_visited: str) -> np.ndarray:
     n_f = 162336
     X_FP = np.empty(shape=(0, n_f))
     try:
@@ -144,9 +148,11 @@ def generate_FP_samples(n_samples_req: int, models: list, file_path: str, last_v
     datasets = list(file.keys())
     if last_visited != None:
         datasets = datasets[datasets.index(last_visited)+1:-1]
+        print(datasets)
     
     #Iterate through datasets in file
     for dataset in datasets:
+        print(f'Reading dataset {dataset}')
         X = file[dataset]
         
         #Run cascade classifier:
@@ -154,14 +160,15 @@ def generate_FP_samples(n_samples_req: int, models: list, file_path: str, last_v
             clf = model[0]
             thresh = model[1]
             
-            #Predict and delete true negatives
+            #Predict and delete TN
             y_pred = 1*(clf.predict_proba(X)[:,1] >= thresh)
             TN_idx = np.where(y_pred == 0)[0]
             X = np.delete(X, TN_idx, axis=0)
         
         #Add FP:s to set
-        X_FP = np.concatenate(X_FP, X)
-        if len(X_FP) > n_samples_req:
+        print(f'Got {len(X)} FP:s from dataset with size {500}')
+        X_FP = np.append(X_FP, X, axis=0)
+        if len(X_FP) >= min_FP:
             #Satisfied required amount, return samples and last visited dataset
             file.close()
             return X_FP, dataset
@@ -182,16 +189,17 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
     # clf_best: Best SC
     # thresh: threshold for SC
     # flag: True if SC is accepted, False otherwise.
-    skf = StratifiedKFold(n_splits=n_splits)
+    skf = KFold(n_splits=n_splits)
     FNR_fold = []
     FPR_fold = []
     d_min = 3 #Initial minimum distance to target rate
     thresh = 0.5 #Initial threshold for SC
     
     #Divide dataset into Kfold (train, test) and validation (train, test)
+    
+    X_KFold, X_validate, y_KFold, y_validate, = train_test_split(X, y, train_size=0.8, random_state=1, stratify=y)
     i = 0
-    X_KFold, X_validate, y_KFold, y_validate, = train_test_split(X, y, train_size=0.75, shuffle=True)
-    for train_idx, test_idx in skf.split(X_KFold, y_KFold):
+    for train_idx, test_idx in skf.split(X_KFold):
         i += 1
         print(f'Fold {i}')
         X_train, X_test = X[train_idx], X[test_idx]
@@ -229,7 +237,7 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
         y_prob = clf.predict_proba(X)[:, -1]
         FPR_list, TPR_list, threshold_list = roc_curve(y, y_prob)
         FNR_list = 1 - TPR_list
-        thresh = optimize_threshold(FNR_list, FPR_list, threshold_list, FNR_target)
+        thresh = optimize_threshold(FNR_list, threshold_list, FNR_target)
         
         #Use threshold to calculate FPR:
         y_pred = 1*(clf_best.predict_proba(X_validate)[:,-1] >= thresh)
@@ -268,7 +276,7 @@ def cross_validate(clf: Any, X: np.ndarray, y: np.ndarray, FNR_target: float, FP
     flag = True
     return clf_best, thresh, flag
         
-def optimize_threshold(FNR_list: np.ndarray, FPR_list: np.ndarray, threshold_list: np.ndarray, target_FNR: float) -> float:
+def optimize_threshold(FNR_list: np.ndarray, threshold_list: np.ndarray, target_FNR: float) -> float:
     #Find threshold that satisfies target false negative rate (FNR)
     idx = 0
     FNR = FNR_list[0]
@@ -321,34 +329,6 @@ def read_feature_file(path_read: str) -> tuple[np.ndarray, np.ndarray]:
     y = np.array(y)
     file.close()
     return X, y
-
-def img2haar_features(path_read: str, path_write: str, n_f: int, n_img: int, img_type: str) -> None:
-    #X: Haar feature for each image
-    #y: label for each image
-    X = np.empty((n_img, n_f))
-    
-    if img_type == 'positive':
-        y = np.array([1]*n_img)
-    elif img_type == 'negative':
-        y = np.array([0]*n_img)
-    else:
-        return print('Wrong input')
-    
-    #Calculate haar feature and break loop if out of bounds
-    for idx, image_id in enumerate(os.listdir(path_read)):
-        print(idx)
-        img = cv2.imread(f'{path_read}/{image_id}', 0)
-        img_ii = integral_image(img)
-        feature = haar_like_feature(img_ii, 0, 0, 24, 24)
-        X[idx] = feature
-        if idx + 1 == n_img: 
-            break
-
-    #Save to h5.file 
-    file = h5py.File(f'{path_write}/{img_type}_school.hdf5', 'w')
-    file.create_dataset('features', data=X)
-    file.create_dataset('labels', data=y)
-    file.close()
 
 if __name__ == "__main__":
     main()
