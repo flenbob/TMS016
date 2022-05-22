@@ -15,14 +15,14 @@ def main():
     #Create face images of dim pixels
     #Copy face_coords.txt and place in same dir as folders '2002' and '2003'
     #where face_coords.txt are all .txt files concatenated
-    path_read = '../negative_images_asd'
-    path_write = '../negative_imgs.hdf5'
+    path_read = '../negative_images_verify'
+    path_write = '../negative_imgs_verify.hdf5'
     dim = (24,24)
     n_f = 162336
     dset_size = 500
     n_dsets = 10
 
-    img2haar_features(path_read, path_write, n_f, 650, 'negative')
+    img2haar_features(path_read, path_write, n_f, 357, 'negative')
     #neg_img2haar_features(path_read, path_write, n_f, dset_size, n_dsets)
     #positive_images_school_photos(path_read, path_write, dim)
     #positive_images_FDDB(path_read, path_write, dim)
