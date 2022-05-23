@@ -22,11 +22,12 @@ def main():
     dset_size = 500
     n_dsets = 10
 
-    img2haar_features(path_read, path_write, n_f, 357, 'negative')
-    #neg_img2haar_features(path_read, path_write, n_f, dset_size, n_dsets)
-    #positive_images_school_photos(path_read, path_write, dim)
+    #img2haar_features(path_read, path_write, n_f, 357, 'negative')
+    #neg_img2haar_features('../negative_images', '../negative_imgs_datasets.hdf5', n_f, dset_size, n_dsets)
+    img2haar_features('../pos_imgs_school_test', '../positive_imgs_school_test.hdf5', 162336, 606, 'positive')
     #positive_images_FDDB(path_read, path_write, dim)
     #negative_images_FDDB('../negative_dataset/images', '../negative_images', dim)
+    #positive_images_school_photos('../positive_images_school_test', '../pos_imgs_school_test', dim)
 
 def neg_img2haar_features(path_read: str, path_write: str, n_f: int, dset_size: int, n_dsets: int) -> None:
     #Load negative images and create file partitioned into datasets of size dset_size (used for generating FP:s in adaboost training)
@@ -34,7 +35,7 @@ def neg_img2haar_features(path_read: str, path_write: str, n_f: int, dset_size: 
     dset_cnt = 0
     idx = 0
 
-    with h5py.File(path_write, 'w') as f:
+    with h5py.File(path_write, 'a') as f:
         for image_id in os.listdir(path_read):
             img = cv2.imread(f'{path_read}/{image_id}', 0)
             img_ii = integral_image(img)
@@ -44,7 +45,7 @@ def neg_img2haar_features(path_read: str, path_write: str, n_f: int, dset_size: 
             if (idx) % dset_size == 0:
                 dset_cnt += 1
                 idx = 0
-                f.create_dataset(f'negative_dataset_{dset_cnt}', data=X)
+                f.create_dataset(f'negative_dataset_{dset_cnt}_0', data=X)
                 X = np.empty((dset_size, n_f))
                 print(f'Dataset {dset_cnt} created')
 
@@ -107,6 +108,7 @@ def positive_images_school_photos(path_read: str, path_write: str, dim: tuple[in
         img = np.array(img)
         norm = np.zeros(dim)
         img = cv2.normalize(img, norm, 0, 255, cv2.NORM_MINMAX)
+        print(image_path)
         cv2.imwrite(f'{path_write}/{image_path}.png', img)
 
 def positive_images_FDDB(path_read: str, path_write: str, dim: tuple[int, int]) -> None:

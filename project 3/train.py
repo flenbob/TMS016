@@ -10,6 +10,8 @@ from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import KFold
 import math
 from sklearn.utils import shuffle
+from classify import cascade_classifier
+from classify import read_model_file
 
 def main():
     #File path for negative dataset to supply FP:s, and the negative + positive imgs at start.
@@ -23,10 +25,10 @@ def main():
     X, y = shuffle(X, y)
     print('files loaded')
     print(f'dataset size: {len(y)}, with {len(y_pos)} positive and {len(y_neg)} negative')
-    
+
     #Define parameters for training
-    FNR_target = 0.01
-    FPR_target = 0.4
+    FNR_target = 1
+    FPR_target = 1
     file_path = 'abclf_2.pkl'
     n_splits = 4
     
@@ -47,16 +49,16 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
     
     #Set initial value to start while-loop
     models = [] #Initialize empty array of (classifier, threshold)
-    t = 1 #Initial amount of WC:s in first SC
+    t = 8 #Initial amount of WC:s in first SC
     t_rate = 0.41 #Constant which controls amount of WC:s to add to SC if it fails
     last_visited = None #Initialize last visited dataset in negative dataset
     min_FP_ratio = 0.75 #min FP/TP share required for training of each SC
     FPR_target = 0.65 #Maximum false positive rate for each SC
     FNR_target = 0.02 #Maximum false negative rate for each SC
-    curr_FPR = 1
+    curr_FP = 1
     with open(file_path, 'wb') as f:
-        while curr_FPR > 0.05: #While we've not cleared enough false positives, keep building layers
-            print(f'A total of {len(y)} samples, with {np.count_nonzero(y==0)} negative, and {np.count_nonzero(y==1)} positive.')
+        while curr_FP > 0.03: #While we've not cleared enough false positives, keep building layers
+            print(f'Current FPR: {curr_FP}. A total of {len(y)} samples, with {np.count_nonzero(y==0)} negative, and {np.count_nonzero(y==1)} positive.')
             #SC and WC:s
             clf = AdaBoostClassifier(
                 DecisionTreeClassifier(criterion='gini', max_depth=1), 
@@ -107,10 +109,11 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
 
             elif min_FP_ratio > FP/TP and last_visited == 'EOF':
                 print(f'No more FP samples to add from file.')
-            
-            TN, FP, _, _ = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
-            curr_FPR = FP/(FP+TN)
-            print(f'Current false positive rate is: {curr_FPR}')
+
+            y_pred = 1*(clf_best.predict_proba(X)[:,-1] >= thresh)
+            TN, FP, FN, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
+            curr_FP = FP/TP
+            print(f'Current false positive rate is: {curr_FP}')
             #Append SC and threshold to .pkl file
             print(f'Successfully generated layer: {len(models)}. SC with {t} WC:s')
             print('----------------------')
