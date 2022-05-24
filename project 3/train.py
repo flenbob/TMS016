@@ -35,7 +35,7 @@ def main():
     file_path = 'abclf_2.pkl'
     
     #Train
-    train_adaboost_classifiers(FNR_target, FPR_target, X, y, file_path, file_path_neg)
+    train_adaboost_classifiers(X, y, file_path, file_path_neg)
 
 def train_adaboost_classifiers(X: np.ndarray, y: np.ndarray, file_path: str, file_path_neg: str) -> None:
     # Input:
