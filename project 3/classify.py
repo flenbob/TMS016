@@ -14,9 +14,9 @@ def main():
     #Read trained model and features
     X_pos1, y_pos1 = read_feature_file('../positive_imgs.hdf5')
     X_neg, y_neg = read_feature_file('../negative_imgs_verify.hdf5')
-    #Run verification on positive images which were on trained on:
-    X_pos1 = X_pos1[600:956]
-    y_pos1 = y_pos1[600:956]
+    #Run verification on positive images
+    X_pos1 = X_pos1[-400:-1]
+    y_pos1 = y_pos1[-400:-1]
     y1 = np.concatenate((y_pos1, y_neg))
     X1 = np.concatenate((X_pos1, X_neg))
 
@@ -25,7 +25,7 @@ def main():
     y2 = np.concatenate((y_pos2, y_neg))
     print('loaded files')
 
-    model_path = 'abclf.pkl'
+    model_path = 'abclf_2.pkl'
     img_path = '../face_test.png'
     save_path = 'data/feature_importances'
 
@@ -35,7 +35,7 @@ def main():
 
     #plot_feature_importances(model_path, img_path, save_path)
     #plot_feature_importances_diagram(model_path, save_path)
-    plot_error_rate(model_path, 'data/error_rate_both', X1, y1, X2, y2)
+    plot_error_rate(model_path, 'data/error_rate_both_asdfss', X1, y1, X2, y2)
 
 def plot_error_rate(model_path: str, save_path: str, X1: np.ndarray, y1: np.ndarray, X2, y2) -> None:
     scores1 = []

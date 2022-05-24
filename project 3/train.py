@@ -16,30 +16,29 @@ from classify import read_model_file
 def main():
     #File path for negative dataset to supply FP:s, and the negative + positive imgs at start.
     file_path_neg = '../negative_imgs_datasets.hdf5'
-    X_pos, y_pos = read_feature_file('../positive_imgs.hdf5')
+    X_pos_FDDB, y_pos_FDDB = read_feature_file('../positive_imgs.hdf5')
+    X_pos_school, y_pos_school = read_feature_file('../positive_imgs_school_test.hdf5')
     X_neg, y_neg = read_feature_file('../negative_imgs.hdf5')
-    X_pos = X_pos[0:600]
-    y_pos = y_pos[0:600]
-    X = np.concatenate((X_pos, X_neg))
-    y = np.concatenate((y_pos, y_neg))
+    X_pos_FDDB = X_pos_FDDB[0:600]
+    y_pos_FDDB = y_pos_FDDB[0:600]
+    X = np.concatenate((X_pos_FDDB, X_pos_school))
+    X = np.concatenate((X, X_neg))
+
+    y = np.concatenate((y_pos_FDDB, y_pos_school))
+    y = np.concatenate((y, y_neg))
     X, y = shuffle(X, y)
     print('files loaded')
     print(f'dataset size: {len(y)}, with {len(y_pos)} positive and {len(y_neg)} negative')
 
     #Define parameters for training
-    FNR_target = 1
-    FPR_target = 1
+
     file_path = 'abclf_2.pkl'
-    n_splits = 4
     
     #Train
-    train_adaboost_classifiers(FNR_target, FPR_target, X, y, file_path, file_path_neg, n_splits)
+    train_adaboost_classifiers(FNR_target, FPR_target, X, y, file_path, file_path_neg)
 
-def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarray, \
-                               y: np.ndarray, file_path: str, file_path_neg: str, n_splits: int) -> None:
+def train_adaboost_classifiers(X: np.ndarray, y: np.ndarray, file_path: str, file_path_neg: str) -> None:
     # Input:
-    # FNR_thresh: Maximum False Negative Ratio threshold [0, 1]
-    # T: List of number of weak classifiers (WC) for each layer of strong classifier (SC)
     # X: Matrix of haar features for each sample (image)
     # y: array of correct binary classification
     # file_path: Filepath including filename (ends with .pkl) (eg. folder1/folder2/file.pkl)
@@ -48,8 +47,9 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
     # None, but saves all SC:s and their thresholds to .pkl file
     
     #Set initial value to start while-loop
+    n_splits = 5
     models = [] #Initialize empty array of (classifier, threshold)
-    t = 8 #Initial amount of WC:s in first SC
+    t = 1 #Initial amount of WC:s in first SC
     t_rate = 0.41 #Constant which controls amount of WC:s to add to SC if it fails
     last_visited = None #Initialize last visited dataset in negative dataset
     min_FP_ratio = 0.75 #min FP/TP share required for training of each SC
@@ -78,11 +78,6 @@ def train_adaboost_classifiers(FNR_target: float, FPR_target: float, X: np.ndarr
             
             #Run SC on dataset and delete TN and FN
             y_pred = 1*(clf_best.predict_proba(X)[:,-1] >= thresh)
-            TN, FP, FN, TP = confusion_matrix(y, y_pred, labels=[0,1]).ravel()
-            FNR = FN/(FN+TP)
-            FPR = FP/(FP+TN)
-            print(f'FNR: {FNR}, FPR: {FPR}')
-
             delete_idx = []
             for i in range(len(y_pred)):
                 if ((y[i] == 0) and (y_pred[i] == 0)) or \
