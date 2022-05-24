@@ -1,73 +1,87 @@
-<<<<<<< HEAD
-from cv2 import boxPoints, threshold
+from typing import Any
 import numpy as np
-from sklearn.metrics import confusion_matrix
-import math
-import h5py
-from sklearn.model_selection import StratifiedKFold
+from classify import read_model_file
+from skimage.transform import integral_image
+from skimage.feature import haar_like_feature, haar_like_feature_coord
+from PIL import Image, ImageOps
+import cProfile, re
 
-# y_prob = clf.predict_proba(X)[:, 1]
-# FPR_list, TPR_list, threshold_list = roc_curve(y, y_prob)
+def main():
+    models = read_model_file('abclf.pkl')
+    
+    # print(models[0][0])
+    # print(type(models[0][0]))
+    # print(models[0][0][1].tree_.feature)
+    #img = cv2.imread('../negative_imgs/images/0000051.jpg', cv2.IMREAD_GRAYSCALE)
+    # img = Image.open('../negative_imgs/images/0000051.jpg')
+    # img = ImageOps.grayscale(img)
+    # img = img.crop((0, 0, 64, 64))
+    # scale = 1.25
+    # delta = 1
+    # #cProfile.run(cascade_scan(models, img, scale, delta))
+    # with cProfile.Profile() as pr:
+    #     positives = cascade_scan(models, img, scale, delta)
+    # pr.print_stats()
 
-# FNR_list = 1 - TPR_list
-# dfplot=pd.DataFrame({'Threshold':threshold_list, 
-# 'False Positive Rate':FPR_list, 
-# 'False Negative Rate': FNR_list})
+def cascade_scan(models: Any, img: np.ndarray, scale: float, delta: float):
+    
+    features_idx_list = []
+    for model in models:
+        SC = model[0]
+        n_features = np.count_nonzero(SC.feature_importances_ != 0)
+        features_idx = np.argsort(SC.feature_importances_)[::-1][0:n_features]
+        features_idx_list.append(features_idx)
+        
+    
+    #Split image into subwindows
+    feature_array = np.empty(shape=(1,162336))
+    feature_types_set = ['type-2-x', 'type-2-y', 'type-3-x', 'type-3-y', 'type-4']
+    feature_coord, feature_types = haar_like_feature_coord(24, 24, feature_type=feature_types_set)
+    
+    positives = []
+    h, w = img.size
+    size_img = min(h,w)
+    size_subwindow = 24
+    
+    while size_subwindow <= size_img:
+        y_pos = 0
+        while y_pos+size_subwindow <= h:
+            x_pos = 0
+            while x_pos+size_subwindow <= w:
+                #Get subwindow and resize
+                subwindow = img.crop((x_pos, y_pos, x_pos+size_subwindow, y_pos+size_subwindow))
+                #subwindow = img[x_pos:(x_pos+size_subwindow), y_pos:(y_pos+size_subwindow)]
+                subwindow_bounds = subwindow
+                #Standardize image
+                std = np.std(subwindow)
+                
+                if std < 1:
+                    print('std < 1')
+                    continue
+                mean = np.mean(subwindow)
+                subwindow = (subwindow - mean)/std
+                
+                #Integral image
+                subwindow_ii = integral_image(subwindow)
+                #Cascade
+                for i, model in enumerate(models):
+                    SC = model[0]
+                    threshold = model[1]
+                    features = haar_like_feature(subwindow_ii, 0, 0, 24, 24, feature_coord=feature_coord[features_idx_list[i]], feature_type=feature_types[features_idx_list[i]])
+                    feature_array[:,features_idx_list[i]] = features
+                    y_pred = 1*(SC.predict_proba(feature_array)[:, 1] >= threshold)
 
-# ax=dfplot.plot(x='Threshold', y=['False Positive Rate',
-# 'False Negative Rate'], figsize=(10,6))
-# ax.plot([thresh,thresh],[0,0.2]) #mark selected thresh
-# plt.show()
+                    if y_pred == 0:
+                        break
+                    elif model == models[-1]:
+                        #If it passes through cascade, then save it
+                        positives.append((subwindow, subwindow_bounds))
 
-X = np.array([[1, 2], [3, 4], [5, 6]])
-y = np.array([1, 2, 1])
+                x_pos += int(delta*scale*size_subwindow/24)
+            y_pos += int(delta*scale*size_subwindow/24)
+        size_subwindow *= scale
+        size_subwindow = int(size_subwindow)
+    return positives
 
-skf = StratifiedKFold(n_splits=2, random_state=None, shuffle=False)
-for train_index, test_index in skf.split(X, y):
-    print('---------')
-    X_train, X_test = X[train_index], X[test_index]
-    y_train, y_test = y[train_index], y[test_index]
-
-    print(X_train, X_test)
-    print(y_train, y_test)
-
-# print(np.concatenate((X, Y)))
-# y_FP = np.array(len(X)*[0])
-# print(y_FP)
-
-
-# # #X_FP = np.ndarray(shape=(0, 3))
-# X_FP = np.empty(shape=(0, 3))
-# X = np.array([[1, 2, 3],[1,2,3],[1,2,3]])
-# print(np.concatenate((X, X_FP)))
-
-# print(len(X))
-# ys = np.array([1, 0, 1, 0])
-# y = np.array(len(X)*[0])
-# y = y.reshape((-1,1))
-
-# FP_idx = np.where(ys == 0)[0]
-# #X_FP.append(X[FP_idx])
-# #X_FP = np.append(X_FP, X[FP_idx])
-# X_FP = np.append(X_FP, X[FP_idx], axis = 0)
-# X_FP = np.append(X_FP, X[np.where(ys == 1)[0]], axis = 0)
-# print(X_FP)
-
-# print(y)
-# print(np.where(ys == 1)[0])
-
-# file = h5py.File('data/positive_test.hdf5', 'r')
-# keys = file.keys()
-# keys = list(keys)
-=======
-import numpy as np
-from sklearn.utils import shuffle
-
-
-X_FP = np.empty(shape=(0, 2))
-X = np.array([[0, 1],[2,3], [4,5]])
-
-X_FP = np.append(X, X_FP, axis=0)
-print(X_FP)
-
->>>>>>> b877610452047c3878ab3744db075c470a59f8a1
+if __name__ == "__main__":
+    main()
