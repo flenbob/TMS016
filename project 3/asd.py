@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from cv2 import boxPoints, threshold
 import numpy as np
 from sklearn.metrics import confusion_matrix
@@ -58,3 +59,15 @@ for train_index, test_index in skf.split(X, y):
 # file = h5py.File('data/positive_test.hdf5', 'r')
 # keys = file.keys()
 # keys = list(keys)
+=======
+import numpy as np
+from sklearn.utils import shuffle
+
+
+X_FP = np.empty(shape=(0, 2))
+X = np.array([[0, 1],[2,3], [4,5]])
+
+X_FP = np.append(X, X_FP, axis=0)
+print(X_FP)
+
+>>>>>>> b877610452047c3878ab3744db075c470a59f8a1
