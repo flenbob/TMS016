@@ -1,113 +1,191 @@
-from imageio import save
+from typing import Any
 import numpy as np
 import pickle
 import h5py
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
-from skimage.feature import draw_haar_like_feature
-from skimage.feature import haar_like_feature_coord
+from skimage.feature import draw_haar_like_feature, haar_like_feature
+from skimage.transform import integral_image
+from PIL import Image, ImageOps
 import cv2
+import cProfile, pstats
+import time
 
 
 def main():
+    models = read_model_file('abclf_4.pkl')
+    models = models[-1]
 
-    #Read trained model and features
-    X_pos1, y_pos1 = read_feature_file('../positive_imgs.hdf5')
-    X_neg, y_neg = read_feature_file('../negative_imgs_verify.hdf5')
-    #Run verification on positive images
-    X_pos1 = X_pos1[-400:-1]
-    y_pos1 = y_pos1[-400:-1]
-    y1 = np.concatenate((y_pos1, y_neg))
-    X1 = np.concatenate((X_pos1, X_neg))
+    img = Image.open('../test/img2.jpg')
+    img = ImageOps.grayscale(img)
+    start = time.perf_counter()
+    with cProfile.Profile() as pr:
+        img_ii, subw = cascade_scan(models, 2, 3, 24, img)
+        print(len(img_ii))
+    stats = pstats.Stats(pr).sort_stats('cumtime')
+    stats.print_stats()
+    finish = time.perf_counter()
+    print(f'Finished in: {round(finish-start, 2)} seconds')
 
-    X_pos2, y_pos2 = read_feature_file('../positive_imgs_school_test.hdf5')
-    X2 = np.concatenate((X_pos2, X_neg))
-    y2 = np.concatenate((y_pos2, y_neg))
-    print('loaded files')
 
-    model_path = 'abclf_2.pkl'
-    img_path = '../face_test.png'
-    save_path = 'data/feature_importances'
+def plot_box_img(file_path: str, slice: float, img_path: str) -> None:
+    #Save image with boxes that were written to the .h5 file by 'write_scanbox_file()'
+    hf = h5py.File(file_path, 'r')
+    boxes = hf['data']
+    boxes = [box for box in boxes]
+    hf.close()
 
-    # models = read_model_file(model_path)
-    # for model in models:
-    #     print(model)
+    #Slice the least important boxes:
+    boxes = boxes[0:int(slice*len(boxes))]
 
-    #plot_feature_importances(model_path, img_path, save_path)
-    #plot_feature_importances_diagram(model_path, save_path)
-    plot_error_rate(model_path, 'data/error_rate_both_asdfss', X1, y1, X2, y2)
+    #Read image and plot boxes to it
+    img = cv2.imread(img_path)
+    for box_coords in boxes:
+        left = box_coords[0]
+        top = box_coords[1]
+        right = box_coords[2]
+        bottom = box_coords[3]
+        img = cv2.rectangle(img, (left, top), (right, bottom), color=(255, 0, 0), thickness=2)
 
-def plot_error_rate(model_path: str, save_path: str, X1: np.ndarray, y1: np.ndarray, X2, y2) -> None:
-    scores1 = []
-    scores2 = []
-    models = read_model_file(model_path)
-    print(len(models))
+
+    cv2.imwrite('boxes_photo.jpg', img)
+    
+def write_scanbox_file(models: Any, img_path: str, scale: float, delta: float) -> None:
+    #Run cascade scan through image and write coordinate of subwindows which are
+    #passed as positive, sorted by confidence (high -> low)
+    img = Image.open(img)
+    img = ImageOps.grayscale(img)
+    _, subwindow_bounds_list = cascade_scan(models, img, scale, delta)
+    img_size_sort = []
+
+    proba = [el[1] for el in subwindow_bounds_list]
+    img_size = [el[0] for el in subwindow_bounds_list]
+    idx_sorted = sorted(range(len(proba)), key=lambda k: proba[k])
+    idx_sorted = idx_sorted[::-1]
+
+    for i in idx_sorted:
+        img_size_sort.append(img_size[i])
+
+    hf = h5py.File('face_boxes.h5', 'w')
+    g1 = hf.create_dataset('data', data=img_size_sort)
+    hf.close()
+
+def plot_error_rate(models: Any, save_path: str, X: np.ndarray, y: np.ndarray) -> None:
+    ERR = []
+    FNR = []
+    FPR = []
     curr_model = []
     for model in models:
-        print('model run')
         curr_model.append(model)
-        print(curr_model)
-        y_pred1 = cascade_classifier(X1, curr_model)
-        tn, fp, fn, tp = confusion_matrix(y1, y_pred1).ravel()
-        scores1.append((fp+fn)/(tn+fp+fn+tp))
-        y_pred2 = cascade_classifier(X2, curr_model)
-        tn, fp, fn, tp = confusion_matrix(y2, y_pred2).ravel()
-        scores2.append((fp+fn)/(tn+fp+fn+tp))
-    
-    plt.plot(range(len(scores1)), scores1, label='FDDB')
-    plt.scatter(range(len(scores1)), scores1)
-    plt.plot(range(len(scores2)), scores2, label='School photo dataset')
-    plt.scatter(range(len(scores2)), scores2)
+        y_pred = cascade_classifier(X, curr_model)
+        tn, fp, fn, tp = confusion_matrix(y, y_pred).ravel()
+        ERR.append((fp+fn)/(tn+fp+fn+tp))
+        FNR.append(fn/(fn+tp))
+        FPR.append(fp/(fp+tn))
+
+    x = range(1, len(ERR)+1)
+    plt.plot(x, ERR, label='Error rate')
+    plt.plot(x, FNR, label='False negative rate')
+    plt.plot(x, FPR, label='False positive rate')
+    plt.scatter(x, ERR)
+    plt.scatter(x, FNR)
+    plt.scatter(x, FPR)
     plt.xlabel('Number of layers')
-    plt.legend()
     plt.ylabel('Error rate')
+    plt.legend()
     plt.savefig(f'{save_path}')
     plt.close()
 
-def plot_feature_importances(model_path: str, img_path: str, save_path:str) -> None:
-    models = read_model_file(model_path)
+def plot_feature_importances(models: Any, img_path: str, save_path:str) -> None:
+    #Given a model
     image = cv2.imread(img_path, 0)
-    idx_sorted_list = []
-    for model in models:
-        SC = model[0]
-        idx_sorted_list.append(np.argsort(SC.feature_importances_)[::-1])
+    fig, axes = plt.subplots(1, 7)
+    for idx, ax in enumerate(axes.ravel()):
+        feature_coords = models[idx][3]
+        img = image
+        img = draw_haar_like_feature(img, 0, 0, 24, 24, feature_coord = feature_coords[3:6])
     
-    feature_types = ['type-2-x', 'type-2-y', 'type-3-x', 'type-3-y', 'type-4']
-    feature_coord, feature_type = haar_like_feature_coord(width=image.shape[1], height=image.shape[0],
-                            feature_type=feature_types)
+        ax.imshow(img)
+        ax.set_xticks([])
+        ax.set_yticks([])
 
-    for i, idx_sorted in enumerate(idx_sorted_list):
-        fig, axes = plt.subplots(3, 2)
-        for idx, ax in enumerate(axes.ravel()):
-            img = draw_haar_like_feature(image, 0, 0,
-                                            image.shape[1],
-                                            image.shape[0],
-                                            [feature_coord[idx_sorted[idx]]])
-            ax.imshow(img)
-            ax.set_xticks([])
-            ax.set_yticks([])
+    _ = fig.suptitle('Subset of selected features for each layer')
+    plt.savefig(f'{save_path}')
+    plt.close()
 
-        _ = fig.suptitle('The most important features')
-        plt.savefig(f'{save_path}_layer{i}')
-        plt.close()
+def cascade_scan(models: Any, scale: float, delta: float, size_subwindow: int, img: Image) -> list:
+    """Image scan with cascade classifier applied on each subwindow, returning positively classified subwindows
 
-def plot_feature_importances_diagram(model_path: str, save_path: str) -> None:
-    #Plots a diagram of feature importances vs index for each layer
-    models = read_model_file(model_path)
-    sorted_lists = []
-    x_range_list = []
-    for model in models:
-        SC = model[0]
-        x_range = np.count_nonzero(SC.feature_importances_ != 0)
-        sorted_lists.append(np.sort(SC.feature_importances_)[::-1][0:x_range])
-        x_range_list.append(x_range)
+    Args:
+        models (Any): Set of models for each layer of the cascade
+        img (np.ndarray): Input grayscale image to scan
+        scale (float): Scaling rate of subwindow size
+        delta (float): Pixel step size for each subwindow
+        size_subwindow (int): Initial subwindow size (which always will be downscaled to 24x24)
 
-    for (x_range, sorted_list) in zip(x_range_list, sorted_lists):
-        plt.plot(range(x_range), sorted_list)
+    Returns:
+        list: Positively classified subwindows and their integral image
+    """
+    img_ii_positive_list = []
+    subwindow_bounds_list = []
+    w, h = img.size
+    size_img = min(w, h)
+    y_pos = 0
+    x_pos = 0
+    y_pred_avg = np.zeros(7)
+    
+    while size_subwindow <= size_img:
+        while y_pos+size_subwindow <= h:
+            while x_pos+size_subwindow <= w:
+                #Get subwindow and resize
+                subwindow = img.crop((x_pos, y_pos, x_pos+size_subwindow, y_pos+size_subwindow))
+                subwindow_bounds = [x_pos, y_pos, x_pos+size_subwindow, y_pos+size_subwindow]
+                
+                #Resize and standardize
+                subwindow = subwindow.resize((24, 24))
+                subwindow = np.array(subwindow)
+                subwindow = subwindow - np.mean(subwindow)
+                subwindow_std = np.std(subwindow)
 
-    plt.show()
+                #If std is too low, then discard
+                if subwindow_std < 1:
+                    x_pos += int(delta*scale*size_subwindow/24)
+                    continue
+                subwindow = 255*subwindow/subwindow_std
 
-def cascade_classifier(X: np.ndarray, models: list) -> int:
+                #Integral image
+                subwindow_ii = integral_image(subwindow)
+
+                #Cascade layers
+                for i, model in enumerate(models):
+                    SC = model[0]
+                    threshold = model[1]
+                    feature_types = model[2]
+                    feature_coords = model[3]
+
+                    features = haar_like_feature(subwindow_ii, 0, 0, 24, 24, feature_type=feature_types, feature_coord=feature_coords)
+                    y_pred = 1*(SC.predict_proba(features.reshape(1,-1))[:, 1] >= threshold)
+                    y_pred_avg[i] = y_pred
+
+                    #If it fails in a layer, then discard it
+                    if y_pred == 0:
+                        #y_pred_avg = np.zeros(7)
+                        break
+                    elif model == models[-1]:
+                        #If it passes through cascade, then save it
+                        img_ii_positive_list.append(subwindow_ii)
+                        subwindow_bounds_list.append([subwindow_bounds, np.mean(y_pred_avg)])
+
+                x_pos += delta
+            y_pos += delta
+            x_pos = 0
+        size_subwindow *= scale
+        x_pos = 0
+        y_pos = 0
+        size_subwindow = int(size_subwindow)
+    return img_ii_positive_list, subwindow_bounds_list
+
+def cascade_classifier(X: np.ndarray, models: list) -> np.ndarray:
     # Input:
     # features: Array of features for an image
     # models: List of models for each layer in the cascade
@@ -121,10 +199,18 @@ def cascade_classifier(X: np.ndarray, models: list) -> int:
         #Load strong classifier and its threshold
         SC = model[0]
         threshold = model[1]
-        #print(SC.predict_proba(img))
+        feature_type = model[2]
+        feature_coord = model[3]
+        feature_idx = model[4]
 
+        print(feature_idx)
+        #Calculate features of subset for each SC
+        #features = haar_like_feature(subwindow_ii, 0, 0, 24, 24, feature_type=feature_types, feature_coord=feature_coords)
+        X_pos_samples = X[y==1]
+        y_pred = 1*(SC.predict_proba(X_pos_samples[:, feature_idx])[:, 1] >= threshold)
+        
         y_idx = np.where(y == 1)
-        y_pred = 1*(SC.predict_proba(X[y == 1])[:, 1] >= threshold)
+        #y_pred = 1*(SC.predict_proba(X[y == 1])[:, 1] >= threshold)
         y[y_idx] = y_pred
     return y
 
