@@ -1,35 +1,66 @@
+import constants as c
+from model import Model
+import pickle
 import numpy as np
 import os
+import math
 import concurrent.futures
-import numpy as np
 import functools
-import pickle
 from PIL import Image, ImageOps
 from skimage.feature import haar_like_feature, haar_like_feature_coord
 from skimage.transform import integral_image
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import confusion_matrix, roc_curve
-from sklearn.model_selection import train_test_split, KFold
-from model import Model
+from sklearn.model_selection import train_test_split
+
+def fit_model(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
+    """Fits a model consisting of an Adaboost classifier with weak classifiers (decision stumps).
+
+    Args:
+        X (np.ndarray): Sample features
+        y (np.ndarray): Sample labels
+        n_wc (int): Number of weak classifiers
+
+    Returns:
+        Model: Trained model
+    """
+    model = None
+    while not model:
+        #Define classifier and train model
+        clf = AdaBoostClassifier(
+            DecisionTreeClassifier(criterion='gini', max_depth=1), 
+            algorithm="SAMME.R", 
+            n_estimators=n_wc
+            )
+        X_train, X_validate, y_train, y_validate = train_test_split(X, y, train_size = 0.75, random_state=42)
+        clf.fit(X_train, y_train)
+        model = model_reduce(clf, X, y)
+
+        #Select threshold for model
+        model, FNR, FPR = select_threshold(model, X_train, y_train)
+        
+        #Control target rates on train subset
+        if not (FNR < c.FNR_MAX and FPR < c.FPR_MAX):
+            print(f'Train: SC with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
+            model = None
+            n_wc += math.ceil(c.WC_RATE*n_wc)
+            continue
+
+        #Control target rates on validaiton subset
+        model = vaildate_model(model, X_validate, y_validate)
+        if not model:
+            print(f'Validate: SC with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
+            n_wc += math.ceil(c.WC_RATE*n_wc)
+            continue
+    return model
 
 def read_sample_file(file_path: str) -> tuple[np.ndarray]:
-    pass
-
-def read_model_file(file_path: str) -> list:
-    #For old model version generated
-    models = []
     with open(file_path, 'rb') as f:
-        try:
-            while True:
-                model = pickle.load(f)
-                #print(f'{model}')
-                models.append(model)
-        except (EOFError):
-            pass
-    return models 
+        samples = pickle.load(f)
+        return samples
 
-def delete_samples(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray]:
+def delete_samples(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Deletes false negative and true negative samples
 
     Args:
@@ -38,7 +69,7 @@ def delete_samples(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarr
         y (np.ndarray): Sample labels
 
     Returns:
-        tuple[np.ndarray]: Subset of sample features, sample labels and sample label predicitons
+        tuple[np.ndarray]: Sample features and sample labels
     """
     delete_idx = []
     y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
@@ -49,154 +80,69 @@ def delete_samples(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarr
             ((y[i] == 1) and (y_pred[i] == 0)):
             delete_idx.append(i)
 
-    print(f'Deleted {round(100*len(delete_idx)/len(y_pred), 2)}% of samples')
+    print(f'Deleted {len(delete_idx)} samples ({round(100*len(delete_idx)/len(y_pred), 2)}%).')
     X = np.delete(X, delete_idx, axis=0)
     y = np.delete(y, delete_idx)
-
     return X, y
 
-def get_rates(X: np.ndarray, y: np.ndarray, model: Model=None, y_pred: np.ndarray=None) -> tuple:
-    """Get false negative and false positive rates for samples X and labels y for either model or label prediction array y_pred
+def select_threshold(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[Model, float, float]:
+    """Selects threshold which achieves accepted FNR and FPR, and minimizes FNR as much as possible.
 
     Args:
-        X (np.ndarray): Sample features.
-        y (np.ndarray): Sample labels.
-        model (Model, optional): Trained model. Defaults to None.
-        y_pred (np.ndarray, optional): Label prediction array. Defaults to None.
-
-    Raises:
-        Exception: Error if neither or both model and y_pred are not None.
+        model (Model): Trained model
+        X (np.ndarray): Sample features
+        y (np.ndarray): Sample labels
 
     Returns:
-        tuple: false negative and false positive rates.
+        tuple[Model, float, float]: Model with selected threshold, and given FNR and FPR.
     """
-    try:
-        if Model:
-            y_pred = 1*(model.clf.predict_proba(X)[:,-1] >= model.threshold)
-            tn, fp, fn, tp = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
-        elif y_pred:
-            tn, fp, fn, tp = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
-    except:
-        raise Exception("Incorrect input, allows either model or y_pred. Not neither, or both.")
-        
-    fnr = fn/(fn+tp)
-    fpr = fp/(fp+tn)
-
-    return fnr, fpr
-
-def optimize_threshold(roc: tuple[np.ndarray], FNR_max: float, FPR_max: float) -> tuple[float]:
-    """Uses ROC-curve to find threshold which is below maximum accepted false negative and false positive rates, and optimizes further if possible.
-
-    Args:
-        roc (tuple[np.ndarray]): arrays returned from ROC, consisting of false positive rates, false negative rates and thresholds.
-        FNR_max (float): Maximum accepted false negative rate.
-        FPR_max (float): Maximum accepted false positive rate.
-
-    Returns:
-        tuple[float]: Optimal threshold and given false positive and false negative rates
-    """
-
+    #Generate ROC-curve
+    y_prob = model.clf.predict_proba(X[:, model.feats_idx])[:, -1]
+    roc = roc_curve(y, y_prob)
     FPR_list = roc[0]
     FNR_list = 1 - roc[1]
     threshold_list = roc[2]
-    #Find first index which achieves accepted false negative rate
- 
-    
+
+    #Find index which maximizes FPR (and minimizes FNR), but is within constraints.
+    FPR = FPR_list[0]
     idx = 0
-    FNR = FNR_list[0]
-    while FNR >= FNR_max:
+    while FPR <= c.FPR_MAX:
         idx += 1
-        FNR = FNR_list[idx]
+        FPR = FPR_list[idx]
     
-    FPR = FPR_list[idx]
-    thresh = threshold_list[idx]
+    FPR = FPR_list[idx-1]
+    FNR = FNR_list[idx-1]
+    thresh = threshold_list[idx-1]
 
-    #If we achieve both rates, try to optimize further
-    if FPR < FPR_max:
-        #Slice indicies which have an accepted FNR
-        FNR_list = FNR_list[idx:-1]
-        FPR_list = FPR_list[idx:-1]
-        threshold_list = threshold_list[idx:-1]
+    #Set model threshold
+    print(f'Selected threshold: {thresh:.4f}')
+    print(f'Train: FNR = {FNR:.4f} and FPR = {FPR:.4f}')
+    model.threshold = thresh
+    return model, FNR, FPR
 
-        idx_min = np.argmin(np.abs(FNR_list - FNR_max) + np.abs(FPR_list - FPR_max))
-        FNR = FNR_list[idx_min]
-        FPR = FPR_list[idx_min]
-        thresh = threshold_list[idx_min]
-
-    return thresh, FNR, FPR
-
-def vaildate_model(model: Model, X_validate: np.ndarray, y_validate: np.ndarray, FNR_max: float, FPR_max: float) -> Model:
+def vaildate_model(model: Model, X: np.ndarray, y: np.ndarray) -> Model:
     """Validates that trained model yields lower than maximum accepted false negative and false positive rates for validation data.
 
     Args:
         model (Model): Trained model.
-        X_validate (np.ndarray): Validation sample features.
-        y_validate (np.ndarray): Validation sample labels.
-        FNR_max (float): Maximum accepted false negative rate.
-        FPR_max (float): Maximum accepted false positive rate.
+        X (np.ndarray): Validation sample features.
+        y (np.ndarray): Validation sample labels.
 
     Returns:
         Model: Validated model or None if validation is not accepted.
     """
 
     #Control target rates on validation subset
-    FNR, FPR = get_rates(X_validate, y_validate, model=model)
-    if not (FNR < FNR_max and FPR < FPR_max):
+    y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
+    tn, fp, fn, tp = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
+
+    fnr = fn/(fn+tp)
+    fpr = fp/(fp+tn)
+
+    print(f'Validate: FNR = {fnr:.4f} and FPR = {fpr:.4f}')
+    if not (fnr < c.FNR_MAX and fpr < c.FPR_MAX):
         return None
-
     return model
-
-def cross_validate(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray, FNR_target: float, FPR_target: float, n_splits: int) -> list:
-    # OLD ???
-    skf = KFold(n_splits=n_splits)
-    FNR_fold = []
-    FPR_fold = []
-    FNR_best = 1
-    FPR_best = 1
-    X_KFold, X_test, y_KFold, y_test, = train_test_split(X, y, train_size=0.75, random_state=42, stratify=y)
- 
-    for i, (train_idx, test_idx) in enumerate(skf.split(X_KFold)):
-        print(f'Fold {i}')
-        X_train, X_validate = X_KFold[train_idx], X_KFold[test_idx]
-        y_train, y_validate = y_KFold[train_idx], y_KFold[test_idx]
-        
-        #Train SC
-        clf.fit(X_train, y_train)
-
-        #Train SC w.r.t selected features of train clf_reduced
-        model = model_reduce(clf, X_train, y_train)
-
-        #Tune hyperparameter FPR and FNR of SC (reduced) and then validate
-        y_prob = model.clf.predict_proba(X_validate[:, model.feats_idx])[:, -1]
-        FPR_list, TPR_list, threshold_list = roc_curve(y_validate, y_prob)
-        FNR_list = 1 - TPR_list
-        thresh, FPR, FNR = optimize_threshold(FNR_list, FPR_list, threshold_list, FNR_target)
-        model.threshold = thresh
-        print(f'Threshold = {thresh} gives FNR = {FNR}, FPR = {FPR}')
-
-        #If feasible and best performing, save model and threshold
-        if FPR < FPR_target and FNR < FNR_target and FPR < FPR_best and FNR < FNR_best:
-            model_best = model
-        
-        FNR_fold.append(FNR)
-        FPR_fold.append(FPR)
-
-    #If the mean performance of our models is worse than target, then we need more WC:s
-    if sum(FNR_fold)/len(FNR_fold) > FNR_target or sum(FPR_fold)/len(FPR_fold) > FPR_target:
-        flag = False
-        clf_best = None
-        return clf_best, flag
-
-    #Run best model and its threshold on test data and check for overfitting
-    y_pred = 1*(clf_best[0].predict_proba(X_test[:, clf_best[4]])[:, -1] >= clf_best[1])
-    TN, FP, FN, TP = confusion_matrix(y_test, y_pred, labels=[0, 1]).ravel()
-    FNR = FN/(FN+TP)
-    FPR = FP/(FP+TN)
-    print(f'VALIDATION SET: Threshold: {clf_best[1]} gives: FNR = {FNR}, FPR = {FPR}')
-
-    #Return
-    flag = True
-    return clf_best, flag
 
 def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model:
     """Converts classifier to a model which takes into account a reduced number of features.
@@ -244,11 +190,11 @@ def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model
     model_reduced = Model(clf_reduced, 0.5, feature_type_SC, feature_coord_SC, feature_indicies)
     return model_reduced
 
-def cascade_scan(models: list[Model], img: Image, size_subwindow: int, scale: float, pos_shift: int) -> list:
+def cascade_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[int]) -> list:
+    size_subwindow = 24
     w, h = img.size
     size_img = min(w,h)
-    img_ii_list = []
-    subwindow_bounds_list = []
+    samples = []
     x_pos = pos_shift[0]
     y_pos = pos_shift[1]
 
@@ -276,59 +222,108 @@ def cascade_scan(models: list[Model], img: Image, size_subwindow: int, scale: fl
 
                 #Cascade layers
                 for i, model in enumerate(models):
-                    #OLD MODEL VERSION, CHANGE SOON
-                    SC = model[0]
-                    threshold = model[1]
-                    feature_types = model[2]
-                    feature_coords = model[3]
-
-                    features = haar_like_feature(subwindow_ii, 0, 0, 24, 24, feature_type=feature_types, feature_coord=feature_coords)
-                    y_pred = 1*(SC.predict_proba(features.reshape(1,-1))[:, 1] >= threshold)
+                    features = haar_like_feature(subwindow_ii, 0, 0, 24, 24, feature_type=model.feat_types, feature_coord=model.feats)
+                    y_pred = 1*(model.clf.predict_proba(features.reshape(1,-1))[:, 1] >= model.threshold)
                     y_pred_avg[i] = y_pred
 
                     #If it fails in a layer, then discard it
                     if y_pred == 0:
                         break
+
+                    #If it passes through cascade, then calculate all of its 162336 haar like features
                     elif model == models[-1]:
-                        #If it passes through cascade, then save it
-                        img_ii_list.append(subwindow_ii)
-                        subwindow_bounds_list.append([subwindow_bounds, np.mean(y_pred_avg)])
+                        samples.append(haar_like_feature(subwindow_ii, 0, 0, 24, 24))
+                        if len(samples) > n_add/7:
+                            return samples
+
                 x_pos += pos_shift[2]
             y_pos += pos_shift[3]
             x_pos = pos_shift[0]
-        size_subwindow *= scale
+        size_subwindow *= c.SCALE
         size_subwindow = int(size_subwindow)
         x_pos = pos_shift[0]
         y_pos = pos_shift[1]
-    return img_ii_list, subwindow_bounds_list
+    return samples
 
-def add_samples(models: list[Model], img: Image, scale: float, delta: int) -> list[np.ndarray]:
-    """Generates list of integral images for negatively labeled samples from subwindows of the input image.
+def add_samples(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited: str) -> tuple[np.ndarray, np.ndarray, str]:
+    """Adds false negative samples from the negative dataset.
+
     Args:
-        models (list[Model]): List of all model layers.
-        img (Image): Grayscale image from which subwindows are generated.
-        scale (float): Subwindow size growth rate for each round
-        delta (int): Distances between each subwindow in pixels.
+        models (list[Model]): Trained model
+        X (np.ndarray): Sample features
+        y (np.ndarray): Sample labels
+        last_visited (str): Path to last visited image in the negative dataset
 
     Returns:
-        list[np.ndarray]: List of integral images. 
+        tuple[np.ndarray, np.ndarray, str]: Updated sample features, sample labels and image path.
     """
 
-    imgs_list = []
-    size_subwindow = 24
-    w, h = img.size
+    #Check current ratio, return if sufficient
+    n_neg = np.count_nonzero(y==0)
+    n_pos = np.count_nonzero(y==1)
+    neg_ratio = n_neg/(n_neg+n_pos)
+    if neg_ratio > c.NEG_MIN_RATIO:
+        return X, y, last_visited
 
-    N = os.cpu_count()
-    if w >= h:
-        pos_shift = [(delta*i, 0, N*delta, delta)  for i in range(N)]
-    else:
-        pos_shift = [(0, delta*i, delta, N*delta) for i in range(N)]
+    #Number of negative samples to add
+    n_add = int((c.NEG_MIN_RATIO*(n_pos+n_neg) - n_neg)/(1-c.NEG_MIN_RATIO))
+    print(f'Adding {n_add} samples...')
 
-    partial_args = functools.partial(cascade_scan, models, img, size_subwindow, scale)
-    with concurrent.futures.ProcessPoolExecutor() as pool:
-        results = list(pool.map(partial_args, pos_shift))
+    #List images path
+    imgs = os.listdir(c.NEG_DSET_PATH)
+    imgs = [f'{c.NEG_DSET_PATH}/{img}' for img in imgs]
 
-    for result in results:
-        imgs_list.append(result)
+    #Slice at last visited
+    if last_visited != None:
+        imgs = imgs[imgs.index(last_visited)+1:-1]
 
-    return imgs_list
+    #Iterate though images and add samples
+    samples = []
+    i = 0
+    while True:
+        #Read image
+        img = Image.open(imgs[i])
+        img = ImageOps.grayscale(img)
+        i += 1
+
+        #Split image into sections
+        w, h = img.size
+        n_cpu = os.cpu_count()
+        if w >= h:
+            pos_shift = [(c.DELTA*i, 0, n_cpu*c.DELTA, c.DELTA)  for i in range(n_cpu)]
+        else:
+            pos_shift = [(0, c.DELTA*i, c.DELTA, n_cpu*c.DELTA) for i in range(n_cpu)]
+
+        #Multiprocess
+        partial_args = functools.partial(cascade_scan, models, img, n_add)
+        with concurrent.futures.ProcessPoolExecutor() as pool:
+            sample_splits = pool.map(partial_args, pos_shift)
+        
+        #Append result from each process
+        for sample_split in sample_splits:
+            for sample in sample_split:
+                samples.append(sample)
+
+        #Terminate if enough samples are appended
+        if len(samples) >= n_add:
+            break
+        
+    #Add negative samples and labels to dataset
+    X = np.concatenate((X, samples))
+    y = np.concatenate((y, np.array(len(samples)*[0])))
+    return X, y, last_visited
+
+
+#OBSOLETE
+def read_model_file(file_path: str) -> list:
+    #For old model version generated
+    models = []
+    with open(file_path, 'rb') as f:
+        try:
+            while True:
+                model = pickle.load(f)
+                #print(f'{model}')
+                models.append(model)
+        except (EOFError):
+            pass
+    return models 

@@ -1,15 +1,26 @@
-#Contains relevant constants
-N_SPLITS = 5
-T_INIT = 1
-T_RATE = 0.41
-N_MIN = 0.8
+##Training constants
+
+#Weak classifiers parameters
+WC_INIT = 1
+WC_RATE = 0.41
+
+
+NEG_MIN_RATIO = 0.5
+FPR_INIT = float('inf')
 FPR_TERMINATE = 0.05
 FPR_MAX = 0.5
-FNR_MAX = 0.01
+FNR_MAX = 0.02
+
+#Parameters for cascade scan
 SCALE = 1.25
 DELTA = 1
 
-#ADD PATH TO INITIAL DATASETS AND NEGATIVE IMAGES FOLDER?
-PATH_INIT_DATA = '../some_file_with_positive_and_negative_datasets.pkl'
-PATH_NEGATIVE_IMGS = '../some_folder_with_negative_images'
-PATH_MODEL = '../some_model_path.pkl'
+#Path to model file
+MODEL_PATH = 'project 3/train/ABCLF.pkl'
+
+#Path to negative and positive samples
+NEG_SAMPLES_PATH = 'project 3/data/neg_samples.pkl'
+POS_SAMPLES_PATH = 'project 3/data/pos_samples.pkl'
+
+#Path to negative images
+NEG_DSET_PATH = '../negative_imgs'
