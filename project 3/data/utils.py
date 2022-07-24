@@ -7,6 +7,7 @@ import os
 import concurrent.futures
 import pickle
 import functools
+import constants as c
 
 #SAMPLE COLLECTING FUNCTIONS
 def pos_samples(path_read: str, path_write: str, N=float('inf')) -> None:
@@ -38,14 +39,12 @@ def pos_samples(path_read: str, path_write: str, N=float('inf')) -> None:
         print(f'Saved {len(samples)} samples to {path_write}.pkl')
         pickle.dump(samples, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-def neg_samples(path_read: str, path_write: str, delta: float, scale: float, N=float('inf')) -> None:
+def neg_samples(path_read: str, path_write: str, N=float('inf')) -> None:
     """Create 162336 haar-like features for N negative samples and store in path_write.pkl
 
     Args:
         path_read (str): Folder containing positive samples.
         path_write (str): Folder where .pkl file is saved.
-        delta (float): Pixel shift distance between each subwindow.
-        scale (float): Subwindow growth rate.
         N (int, optional): Number of positive samples for which to generate features. Defaults to all samples.
     """
     #List images path
@@ -60,17 +59,16 @@ def neg_samples(path_read: str, path_write: str, delta: float, scale: float, N=f
         img = ImageOps.grayscale(img)
         
         #Split image into sections
-        size_subwindow = 24
         w, h = img.size
         N_cpu = os.cpu_count()
 
         if w >= h:
-            pos_shift = [(delta*i, 0, N_cpu*delta, delta)  for i in range(N_cpu)]
+            pos_shift = [(c.DELTA*i, 0, N_cpu*c.DELTA, c.DELTA)  for i in range(N_cpu)]
         else:
-            pos_shift = [(0, delta*i, delta, N_cpu*delta) for i in range(N_cpu)]
+            pos_shift = [(0, c.DELTA*i, c.DELTA, N_cpu*c.DELTA) for i in range(N_cpu)]
 
         #Multiprocess each section of image
-        partial_args = functools.partial(neg_features, img, size_subwindow, scale)
+        partial_args = functools.partial(neg_features, img)
         with concurrent.futures.ProcessPoolExecutor() as pool:
             sample_splits = list(pool.map(partial_args, pos_shift))
 
@@ -110,7 +108,8 @@ def pos_features(imgs_path: str) -> np.ndarray:
         features.append(feature)
     return features
 
-def neg_features(img: Image, size_subwindow: int, scale: float, pos_shift: tuple[int]) -> np.ndarray:
+def neg_features(img: Image, pos_shift: tuple[int]) -> np.ndarray:
+    size_subwindow = 24
     w, h = img.size
     size_img = min(w,h)
     x_pos = pos_shift[0]
@@ -141,7 +140,7 @@ def neg_features(img: Image, size_subwindow: int, scale: float, pos_shift: tuple
                 x_pos += pos_shift[2]
             y_pos += pos_shift[3]
             x_pos = pos_shift[0]
-        size_subwindow *= scale
+        size_subwindow *= c.SCALE
         size_subwindow = int(size_subwindow)
         x_pos = pos_shift[0]
         y_pos = pos_shift[1]
