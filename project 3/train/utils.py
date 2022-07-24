@@ -312,18 +312,3 @@ def add_samples(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited:
     X = np.concatenate((X, samples))
     y = np.concatenate((y, np.array(len(samples)*[0])))
     return X, y, last_visited
-
-
-#OBSOLETE
-def read_model_file(file_path: str) -> list:
-    #For old model version generated
-    models = []
-    with open(file_path, 'rb') as f:
-        try:
-            while True:
-                model = pickle.load(f)
-                #print(f'{model}')
-                models.append(model)
-        except (EOFError):
-            pass
-    return models 
