@@ -198,7 +198,6 @@ def cascade_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[i
     x_pos = pos_shift[0]
     y_pos = pos_shift[1]
 
-    y_pred_avg = np.zeros(7)
     while size_subwindow <= size_img:
         while y_pos+size_subwindow <= h:
             while x_pos+size_subwindow <= w:
@@ -224,7 +223,6 @@ def cascade_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[i
                 for i, model in enumerate(models):
                     features = haar_like_feature(subwindow_ii, 0, 0, 24, 24, feature_type=model.feat_types, feature_coord=model.feats)
                     y_pred = 1*(model.clf.predict_proba(features.reshape(1,-1))[:, 1] >= model.threshold)
-                    y_pred_avg[i] = y_pred
 
                     #If it fails in a layer, then discard it
                     if y_pred == 0:
