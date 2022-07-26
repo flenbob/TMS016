@@ -4,14 +4,14 @@
 WC_INIT = 1
 WC_RATE = 0.41
 
-
+#Model scoring constraints
 NEG_MIN_RATIO = 0.5
 FPR_INIT = float('inf')
 FPR_TERMINATE = 0.05
-FPR_MAX = 0.5
+FPR_MAX = 0.6
 FNR_MAX = 0.02
 
-#Parameters for cascade scan
+#Parameters for image scan
 SCALE = 1.25
 DELTA = 1
 
