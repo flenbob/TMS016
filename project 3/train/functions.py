@@ -37,22 +37,20 @@ def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
             )
         X_train, X_validate, y_train, y_validate = train_test_split(X, y, train_size = 0.75, random_state=42)
         clf.fit(X_train, y_train)
-        model = model_reduce(clf, X_train, y_train)
 
-        #Select threshold for model and control scorings on train dataset
-        #TODO: FIX
-        model = model_threshold(model, X_train, y_train)
+        model = model_reduce(clf, X_train, y_train)
+        model = model_threshold(model, X_train, X_validate, y_train, y_validate)
         if not model:
             print(f'Train: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
             n_wc += math.ceil(c.WC_RATE*n_wc)
             continue
 
         #Validate model on validation dataset
-        model = model_validate(model, X_validate, y_validate)
-        if not model:
-            print(f'Validate: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
-            n_wc += math.ceil(c.WC_RATE*n_wc)
-            continue
+        # model = model_validate(model, X_validate, y_validate)
+        # if not model:
+        #     print(f'Validate: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
+        #     n_wc += math.ceil(c.WC_RATE*n_wc)
+        #     continue
     return model
 
 def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model:
@@ -101,69 +99,61 @@ def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model
     model_reduced = Model(clf_reduced, 0.5, feature_type_SC, feature_coord_SC, feature_indicies)
     return model_reduced
 
-def model_threshold(model: Model, X: np.ndarray, y: np.ndarray) -> Model:
-    """Selects threshold for the trained model which achieves accepted fnr and fpr, and minimizes fnr.
-
-    Args:
-        model (Model): Trained model
-        X (np.ndarray): Sample features
-        y (np.ndarray): Sample labels
-
-    Returns:
-        Model: Trained model or None if selected threshold is infeasible.
-    """
-
-    #Use ROC to get scorings (fnr and fpr) for different thresholds
-    y_prob = model.clf.predict_proba(X[:, model.feats_idx])[:, -1]
-    fpr_list, tpr_list, thresh_list = roc_curve(y, y_prob)
+def model_threshold(model: Model, X_train: np.ndarray, X_validate: np.ndarray, y_train: np.ndarray, y_validate: np.ndarray) -> Model:
+    #Get feasible training data thresholds
+    y_prob = model.clf.predict_proba(X_train[:, model.feats_idx])[:,-1]
+    fpr_list, tpr_list, thresh_list_train = roc_curve(y_train, y_prob)
     fnr_list = 1 - tpr_list
+    thresh_train = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list_train) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
+    # print(f'Train: FNR = {fnr_list}, FPR = {fpr_list}, thresh = {thresh_list_train}')
+    # print(f'thresh train: {thresh_train}')
 
-    #Find index which maximizes fpr (and minimizes fnr), but is within constraints.
-    fpr = fpr_list[0]
-    idx = 0
-    while fpr <= c.FPR_MAX:
-        idx += 1
-        fpr = fpr_list[idx]
-    
-    fpr = fpr_list[idx-1]
-    fnr = fnr_list[idx-1]
+    #Get feasible validation data thresholds
+    y_prob = model.clf.predict_proba(X_validate[:, model.feats_idx])[:,-1]
+    fpr_list, tpr_list, thresh_list_validate = roc_curve(y_validate, y_prob)
+    fnr_list = 1 - tpr_list
+    thresh_validate = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list_validate) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
+    # print(f'Validate: FNR = {fnr_list}, FPR = {fpr_list}, thresh = {thresh_list_validate}')
+    # print(f'thresh validation: {thresh_validate}')
 
-    #Selected threshold and list of other feasible thresholds
-    thresh = thresh_list[idx-1]
+    if len(thresh_validate) == 0 or len(thresh_train) == 0:
+        return None 
 
-    print(f'Selected threshold: {thresh:.4f}')
-    print(f'Train: FNR = {fnr:.4f} and FPR = {fpr:.4f}')
-    
-    #Check constraints
-    if not (fnr < c.FNR_MAX and fpr < c.FPR_MAX):
+    #Check if there exists feasible thresholds for both datasets
+    if max(min(thresh_validate), min(thresh_train)) <= min(max(thresh_validate), max(thresh_train)):
+        thresh_min = max(min(thresh_validate), min(thresh_train))
+        thresh_max = min(max(thresh_validate), max(thresh_train))
+
+        # print(f'Thresh min = {thresh_min}, thresh_max = {thresh_max}')
+        # print(f'Thresh train = {thresh_train}')
+        # print(f'Thresh validate = {thresh_validate}')
+
+        #Select all feasible thresholds
+        thresh_vals_train = [thresh for thresh in thresh_train if (thresh_max >= thresh >= thresh_min)]
+        thresh_vals_validate = [thresh for thresh in thresh_validate if (thresh_max >= thresh >= thresh_min)]
+        thresh_vals = thresh_vals_train + thresh_vals_validate
+        
+        # print(f'Thresh vals = {thresh_vals}')
+
+        #Find the threshold with the lowest error (sum of false negative and false positive rates)
+        best_error = float('inf')
+        for thresh in thresh_vals:
+            y_pred = 1*(model.clf.predict_proba(X_train[:, model.feats_idx])[:,-1] >= thresh)
+            tn, fp, fn, tp = confusion_matrix(y_train, y_pred, labels=[0, 1]).ravel()
+            fnr_train, fpr_train = fn/(fn+tp), fp/(fp+tn)
+
+            y_pred = 1*(model.clf.predict_proba(X_validate[:, model.feats_idx])[:, -1] >= thresh)
+            tn, fp, fn, tp = confusion_matrix(y_validate, y_pred, labels=[0, 1]).ravel()
+            fnr_validate, fpr_validate = fn/(fn+tp), fp/(fp+tn)
+        
+            error = fnr_train + fpr_train + fnr_validate + fpr_validate
+            if error < best_error:
+                best_error = error
+                best_thresh = thresh
+    else:
         return None
 
-    #Set model threshold to the first feasible threshold (lowest fnr, highest fpr)
-    model.threshold = thresh
-    return model
-
-def model_validate(model: Model, X: np.ndarray, y: np.ndarray) -> Model:
-    """Validates that trained model yields lower than maximum accepted false negative and false positive rates for validation data.
-
-    Args:
-        model (Model): Trained model.
-        X (np.ndarray): Validation sample features.
-        y (np.ndarray): Validation sample labels.
-
-    Returns:
-        Model: Trained model or None if validation is not accepted.
-    """
-
-    #Control target rates on validation subset
-    y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
-    tn, fp, fn, tp = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
-
-    fnr = fn/(fn+tp)
-    fpr = fp/(fp+tn)
-
-    print(f'Validate: FNR = {fnr:.4f} and FPR = {fpr:.4f}')
-    if not (fnr < c.FNR_MAX and fpr < c.FPR_MAX):
-        return None
+    model.threshold = best_thresh
     return model
 
 #SAMPLES RELATED FUNCTIONS
@@ -195,8 +185,8 @@ def samples_del(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray,
     #Check true and predicted values and remove true negative and false negatives.
     y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
     n_prev = len(y)
-    X = [x for (x, t, p) in zip(X, y, y_pred) if not ((t == 0 and p == 0) or (t == 1 and p == 0))]
-    y = [t for (t, p) in zip(y, y_pred) if not ((t == 0 and p == 0) or (t == 1 and p == 0))]
+    X = [x for (x, true, pred) in zip(X, y, y_pred) if not ((true == 0 and pred == 0) or (true == 1 and pred == 0))]
+    y = [true for (true, pred) in zip(y, y_pred) if ((true == 1 and pred == 1) or (true == 0 and pred == 1))]
 
     #OLD:
     # for i in range(len(y_pred)):
@@ -208,7 +198,7 @@ def samples_del(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray,
     # X = np.delete(X, del_idx, axis=0)
     # y = np.delete(y, del_idx)
 
-    print(f'Deleted {len(y)-n_prev} samples ({round(100*len(y)/len(y_pred), 2)}%).')
+    print(f'Deleted {n_prev-len(y)} samples ({round(100*len(y)/len(y_pred), 2)}%).')
     return X, y
 
 def samples_add(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited: str) -> tuple[np.ndarray, np.ndarray, str]:
@@ -225,8 +215,8 @@ def samples_add(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited:
     """
 
     #Check current ratio, return if sufficient
-    n_neg = np.count_nonzero(y==0)
-    n_pos = np.count_nonzero(y==1)
+    n_neg = y.count(0)
+    n_pos = y.count(1)
     neg_ratio = n_neg/(n_neg+n_pos)
     if neg_ratio > c.NEG_MIN_RATIO:
         return X, y, last_visited
