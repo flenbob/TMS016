@@ -5,8 +5,8 @@ import constants as c
 
 def train():
     #Load positive and negative samples
-    X_pos = samples_load(c.POS_SAMPLES_PATH)[0:300]
-    X_neg = samples_load(c.NEG_SAMPLES_PATH)[0:500]
+    X_pos = samples_load(c.POS_SAMPLES_PATH)
+    X_neg = samples_load(c.NEG_SAMPLES_PATH)
     y_pos = np.array(len(X_pos)*[1])
     y_neg = np.array(len(X_neg)*[0])
     X = np.concatenate((X_pos, X_neg))
@@ -40,9 +40,7 @@ def train():
             X, y, last_visited = samples_add(models, X, y, last_visited)
 
             #Update FPR to check for termination criterion
-            y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
-            tn, fp, _, _ = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
-            fpr = fp/(fp+tn)
+            _, fpr = model_error(model, X, y)
 
 if __name__ == "__main__":
     train()

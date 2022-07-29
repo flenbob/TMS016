@@ -29,16 +29,19 @@ def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
     """
     model = None
     while not model:
-        #Define classifier and train model on training data
+        #Split datasets
+        X_train, X_validate, y_train, y_validate = train_test_split(X, y, train_size = 0.75, random_state=42)
+        
+        #Train classifier and place in model object for simpler handling
         clf = AdaBoostClassifier(
             DecisionTreeClassifier(criterion='gini', max_depth=1), 
             algorithm="SAMME.R", 
             n_estimators=n_wc
             )
-        X_train, X_validate, y_train, y_validate = train_test_split(X, y, train_size = 0.75, random_state=42)
-        clf.fit(X_train, y_train)
-
+        clf.fit(X_train, y_train) 
         model = model_reduce(clf, X_train, y_train)
+
+        #Optimize threshold of model that fulfills error rates for both datasets
         model = model_threshold(model, X_train, X_validate, y_train, y_validate)
         if not model:
             print(f'Train: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
@@ -105,55 +108,81 @@ def model_threshold(model: Model, X_train: np.ndarray, X_validate: np.ndarray, y
     Returns:
         Model: Trained model with set threshold
     """
-    #Get feasible training data thresholds
-    y_prob = model.clf.predict_proba(X_train[:, model.feats_idx])[:,-1]
-    fpr_list, tpr_list, thresh_list_train = roc_curve(y_train, y_prob)
-    fnr_list = 1 - tpr_list
-    thresh_train = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list_train) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
-
-    #Get feasible validation data thresholds
-    y_prob = model.clf.predict_proba(X_validate[:, model.feats_idx])[:,-1]
-    fpr_list, tpr_list, thresh_list_validate = roc_curve(y_validate, y_prob)
-    fnr_list = 1 - tpr_list
-    thresh_validate = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list_validate) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
-
+    #Get feasible thresholds from ROC-curve
+    thresh_train = roc_thresholds(model, X_train, y_train)
+    thresh_validate = roc_thresholds(model, X_validate, y_validate)
     if len(thresh_validate) == 0 or len(thresh_train) == 0:
         return None 
 
-    #Check if there exists feasible thresholds for both datasets
-    if max(min(thresh_validate), min(thresh_train)) <= min(max(thresh_validate), max(thresh_train)):
-        thresh_min = max(min(thresh_validate), min(thresh_train))
-        thresh_max = min(max(thresh_validate), max(thresh_train))
-
-        #Select all feasible thresholds
-        thresh_vals_train = [thresh for thresh in thresh_train if (thresh_max >= thresh >= thresh_min)]
-        thresh_vals_validate = [thresh for thresh in thresh_validate if (thresh_max >= thresh >= thresh_min)]
-        thresh_vals = thresh_vals_train + thresh_vals_validate
+    #Check if there exists overlapping interval of feasible thresholds between both datasets
+    thresh_min = max(min(thresh_validate), min(thresh_train))
+    thresh_max = min(max(thresh_validate), max(thresh_train))
+    if thresh_min <= thresh_max:
+        #Select all feasible thresholds for both datasets
+        thresh_list = [thresh for thresh in thresh_train if (thresh_max >= thresh >= thresh_min)] + \
+            [thresh for thresh in thresh_validate if (thresh_max >= thresh >= thresh_min)]
 
         #Find the threshold with the lowest error (sum of false negative and false positive rates)
         best_error = float('inf')
-        for thresh in thresh_vals:
-            #Training dataset
-            y_pred = 1*(model.clf.predict_proba(X_train[:, model.feats_idx])[:,-1] >= thresh)
-            tn, fp, fn, tp = confusion_matrix(y_train, y_pred, labels=[0, 1]).ravel()
-            fnr_train, fpr_train = fn/(fn+tp), fp/(fp+tn)
+        for thresh in thresh_list:
+            #Calculate model error for selected threshold
+            model.threshold = thresh
+            fnr_train, fpr_train = model_error(model, X_train, y_train)
+            fnr_validate, fpr_validate = model_error(model, X_validate, y_validate)
 
-            #Validation dataset
-            y_pred = 1*(model.clf.predict_proba(X_validate[:, model.feats_idx])[:, -1] >= thresh)
-            tn, fp, fn, tp = confusion_matrix(y_validate, y_pred, labels=[0, 1]).ravel()
-            fnr_validate, fpr_validate = fn/(fn+tp), fp/(fp+tn)
-        
-            #Sum rates to calculate error and save threshold if it has lowest seen error
+            #Save threshold with lowest error
             error = fnr_train + fpr_train + fnr_validate + fpr_validate
             if error < best_error:
                 best_error = error
                 best_thresh = thresh
     else:
+        print('No feasible thresholds exist.')
         return None
 
     #Set threshold of model and return it
     model.threshold = best_thresh
+
+    #temporary
+    fnr_train, fpr_train = model_error(model, X_train, y_train)
+    fnr_validate, fpr_validate = model_error(model, X_validate, y_validate)
+    print(f'Threshold: {best_thresh:.3f}')
+    print(f'TRAIN: FNR: {100*fnr_train:.3f}%    FPR: {100*fpr_train:.3f}%')
+    print(f'VALID: FNR: {100*fnr_validate:.3f}%    FPR: {100*fpr_validate:.3f}%')
     return model
+
+def model_error(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[float]:
+    """Calculates false positive and false negative error rates for model on given dataset
+
+    Args:
+        model (Model): Trained model
+        X (np.ndarray): Sample features
+        y (np.ndarray): Sample labels
+
+    Returns:
+        tuple[float]: False negative rate and false positive rate
+    """
+    y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
+    tn, fp, fn, tp = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
+    fnr, fpr = fn/(fn+tp), fp/(fp+tn)
+
+    return fnr, fpr
+
+def roc_thresholds(model: Model, X: np.ndarray, y: np.ndarray) -> list[float]:
+    """Uses ROC-curve to find thresholds that satisfy error rate constraints
+
+    Args:
+        model (Model): Trained model
+        X (np.ndarray): Sample features
+        y (np.ndarray): Sample labels
+
+    Returns:
+        list[float]: List of thresholds
+    """
+    y_prob = model.clf.predict_proba(X[:, model.feats_idx])[:,-1]
+    fpr_list, tpr_list, thresh_list = roc_curve(y, y_prob)
+    fnr_list = 1 - tpr_list
+    thresholds = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
+    return thresholds
 
 #SAMPLES RELATED FUNCTIONS
 def samples_load(file_path: str) -> tuple[np.ndarray]:
@@ -181,7 +210,7 @@ def samples_del(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray,
         tuple[np.ndarray, np.ndarray]: Updated sample features and sample labels
     """
     
-    #Check true and predicted values and remove true negative and false negatives.
+    #Save true positives and false positives, remove true negatives and false negatives
     y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
     n_prev = len(y)
     X = [x for (x, true, pred) in zip(X, y, y_pred) if ((true == 1 and pred == 1) or (true == 0 and pred == 1))]
@@ -211,7 +240,7 @@ def samples_add(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited:
         return X, y, last_visited
 
     #Number of negative samples to add
-    n_add = int((c.NEG_MIN_RATIO*(n_pos+n_neg) - n_neg)/(1-c.NEG_MIN_RATIO))
+    n_add = int((c.NEG_MIN_RATIO*(n_pos+n_neg) - n_neg)/(1-c.NEG_MIN_RATIO)) + int(0.1*(n_pos+n_neg)) #temp
 
     #List images path
     imgs = os.listdir(c.NEG_DSET_PATH)
