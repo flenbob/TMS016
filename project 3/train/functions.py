@@ -187,16 +187,6 @@ def samples_del(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray,
     X = [x for (x, true, pred) in zip(X, y, y_pred) if not ((true == 0 and pred == 0) or (true == 1 and pred == 0))]
     y = [true for (true, pred) in zip(y, y_pred) if ((true == 1 and pred == 1) or (true == 0 and pred == 1))]
 
-    #OLD:
-    # for i in range(len(y_pred)):
-    #     if ((y[i] == 0) and (y_pred[i] == 0)) or \
-    #         ((y[i] == 1) and (y_pred[i] == 0)):
-    #         del_idx.append(i)
-
-    #Delete indicies
-    # X = np.delete(X, del_idx, axis=0)
-    # y = np.delete(y, del_idx)
-
     print(f'Deleted {n_prev-len(y)} samples ({round(100*len(y)/len(y_pred), 2)}%).')
     return X, y
 
