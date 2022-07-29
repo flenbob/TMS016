@@ -184,7 +184,7 @@ def samples_del(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray,
     #Check true and predicted values and remove true negative and false negatives.
     y_pred = 1*(model.clf.predict_proba(X[:, model.feats_idx])[:,-1] >= model.threshold)
     n_prev = len(y)
-    X = [x for (x, true, pred) in zip(X, y, y_pred) if not ((true == 0 and pred == 0) or (true == 1 and pred == 0))]
+    X = [x for (x, true, pred) in zip(X, y, y_pred) if ((true == 1 and pred == 1) or (true == 0 and pred == 1))]
     y = [true for (true, pred) in zip(y, y_pred) if ((true == 1 and pred == 1) or (true == 0 and pred == 1))]
 
     print(f'Deleted {n_prev-len(y)} samples ({round(100*len(y)/len(y_pred), 2)}%).')
