@@ -44,13 +44,6 @@ def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
             print(f'Train: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
             n_wc += math.ceil(c.WC_RATE*n_wc)
             continue
-
-        #Validate model on validation dataset
-        # model = model_validate(model, X_validate, y_validate)
-        # if not model:
-        #     print(f'Validate: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
-        #     n_wc += math.ceil(c.WC_RATE*n_wc)
-        #     continue
     return model
 
 def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model:
@@ -100,21 +93,29 @@ def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model
     return model_reduced
 
 def model_threshold(model: Model, X_train: np.ndarray, X_validate: np.ndarray, y_train: np.ndarray, y_validate: np.ndarray) -> Model:
+    """Finds threshold for which yields lowest sum of false negative and false positive rates but is within constraints.
+
+    Args:
+        model (Model): Trained model
+        X_train (np.ndarray): Training sample features
+        X_validate (np.ndarray): Validation sample features
+        y_train (np.ndarray): Training sample labels
+        y_validate (np.ndarray): Validation sample labels
+
+    Returns:
+        Model: Trained model with set threshold
+    """
     #Get feasible training data thresholds
     y_prob = model.clf.predict_proba(X_train[:, model.feats_idx])[:,-1]
     fpr_list, tpr_list, thresh_list_train = roc_curve(y_train, y_prob)
     fnr_list = 1 - tpr_list
     thresh_train = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list_train) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
-    # print(f'Train: FNR = {fnr_list}, FPR = {fpr_list}, thresh = {thresh_list_train}')
-    # print(f'thresh train: {thresh_train}')
 
     #Get feasible validation data thresholds
     y_prob = model.clf.predict_proba(X_validate[:, model.feats_idx])[:,-1]
     fpr_list, tpr_list, thresh_list_validate = roc_curve(y_validate, y_prob)
     fnr_list = 1 - tpr_list
     thresh_validate = [thresh for (fnr, fpr, thresh) in zip(fnr_list, fpr_list, thresh_list_validate) if not (fpr > c.FPR_MAX or fnr > c.FNR_MAX)]
-    # print(f'Validate: FNR = {fnr_list}, FPR = {fpr_list}, thresh = {thresh_list_validate}')
-    # print(f'thresh validation: {thresh_validate}')
 
     if len(thresh_validate) == 0 or len(thresh_train) == 0:
         return None 
@@ -124,28 +125,25 @@ def model_threshold(model: Model, X_train: np.ndarray, X_validate: np.ndarray, y
         thresh_min = max(min(thresh_validate), min(thresh_train))
         thresh_max = min(max(thresh_validate), max(thresh_train))
 
-        # print(f'Thresh min = {thresh_min}, thresh_max = {thresh_max}')
-        # print(f'Thresh train = {thresh_train}')
-        # print(f'Thresh validate = {thresh_validate}')
-
         #Select all feasible thresholds
         thresh_vals_train = [thresh for thresh in thresh_train if (thresh_max >= thresh >= thresh_min)]
         thresh_vals_validate = [thresh for thresh in thresh_validate if (thresh_max >= thresh >= thresh_min)]
         thresh_vals = thresh_vals_train + thresh_vals_validate
-        
-        # print(f'Thresh vals = {thresh_vals}')
 
         #Find the threshold with the lowest error (sum of false negative and false positive rates)
         best_error = float('inf')
         for thresh in thresh_vals:
+            #Training dataset
             y_pred = 1*(model.clf.predict_proba(X_train[:, model.feats_idx])[:,-1] >= thresh)
             tn, fp, fn, tp = confusion_matrix(y_train, y_pred, labels=[0, 1]).ravel()
             fnr_train, fpr_train = fn/(fn+tp), fp/(fp+tn)
 
+            #Validation dataset
             y_pred = 1*(model.clf.predict_proba(X_validate[:, model.feats_idx])[:, -1] >= thresh)
             tn, fp, fn, tp = confusion_matrix(y_validate, y_pred, labels=[0, 1]).ravel()
             fnr_validate, fpr_validate = fn/(fn+tp), fp/(fp+tn)
         
+            #Sum rates to calculate error and save threshold if it has lowest seen error
             error = fnr_train + fpr_train + fnr_validate + fpr_validate
             if error < best_error:
                 best_error = error
@@ -153,6 +151,7 @@ def model_threshold(model: Model, X_train: np.ndarray, X_validate: np.ndarray, y
     else:
         return None
 
+    #Set threshold of model and return it
     model.threshold = best_thresh
     return model
 
