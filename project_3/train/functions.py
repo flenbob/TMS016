@@ -6,6 +6,7 @@ import os
 import math
 import concurrent.futures
 import functools
+import itertools
 from PIL import Image, ImageOps
 from skimage.feature import haar_like_feature, haar_like_feature_coord
 from skimage.transform import integral_image
@@ -16,7 +17,7 @@ from sklearn.model_selection import train_test_split
 
 
 #MODEL RELATED FUNCTIONS
-def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
+def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> tuple[Model, int]:
     """Fits a model consisting of an Adaboost classifier with weak classifiers (decision stumps).
 
     Args:
@@ -25,7 +26,7 @@ def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
         n_wc (int): Number of weak classifiers
 
     Returns:
-        Model: Trained model
+        Model: Trained model and number of weak classifiers used
     """
     model = None
     while not model:
@@ -47,7 +48,7 @@ def model_fit(X: np.ndarray, y: np.ndarray, n_wc: int) -> Model:
             print(f'Train: Model with {n_wc} WC:s was not enough. Rerun with {n_wc + math.ceil(c.WC_RATE*n_wc)} WC:s.')
             n_wc += math.ceil(c.WC_RATE*n_wc)
             continue
-    return model
+    return model, n_wc
 
 def model_reduce(clf: AdaBoostClassifier, X: np.ndarray, y: np.ndarray) -> Model:
     """Converts classifier to a model which uses a subset of the most important features.
@@ -219,17 +220,17 @@ def samples_del(model: Model, X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray,
     print(f'Deleted {n_prev-len(y)} samples ({round(100*len(y)/len(y_pred), 2)}%).')
     return X, y
 
-def samples_add(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited: str) -> tuple[np.ndarray, np.ndarray, str]:
+def samples_add(models: list[Model], X: np.ndarray, y: np.ndarray, img_list: list[str]) -> tuple[np.ndarray, np.ndarray, str]:
     """Adds false negative samples from the negative dataset.
 
     Args:
-        models (list[Model]): Trained model
+        models (list[Model]): Trained models
         X (np.ndarray): Sample features
         y (np.ndarray): Sample labels
-        last_visited (str): Path to last visited image in the negative dataset
+        img_list (list[str]): List of paths to not yet exhausted images in the negative dataset
 
     Returns:
-        tuple[np.ndarray, np.ndarray, str]: Updated sample features, sample labels and image path.
+        tuple[np.ndarray, np.ndarray, str]: Updated sample features, sample labels and path to last selected image.
     """
 
     #Check current ratio, return if sufficient
@@ -237,60 +238,58 @@ def samples_add(models: list[Model], X: np.ndarray, y: np.ndarray, last_visited:
     n_pos = y.count(1)
     neg_ratio = n_neg/(n_neg+n_pos)
     if neg_ratio > c.NEG_MIN_RATIO:
-        return X, y, last_visited
+        return X, y, img_list
 
     #Number of negative samples to add
-    n_add = int((c.NEG_MIN_RATIO*(n_pos+n_neg) - n_neg)/(1-c.NEG_MIN_RATIO)) + int(0.1*(n_pos+n_neg)) #temp
+    n_add_tot = int((c.NEG_MIN_RATIO*(n_pos+n_neg) - n_neg)/(1-c.NEG_MIN_RATIO))
+    n_add = n_add_tot
 
-    #List images path
-    imgs = os.listdir(c.NEG_DSET_PATH)
-    imgs = [f'{c.NEG_DSET_PATH}/{img}' for img in imgs]
+    #List images path if first time
+    if img_list == None:
+        imgs_path = os.listdir(c.NEG_DSET_PATH)
+        img_list = [f'{c.NEG_DSET_PATH}/{img}' for img in imgs_path]
 
-
-    #Slice at last visited image
-    if last_visited != None:
-        imgs = imgs[imgs.index(last_visited)+1:-1]
-
-    #Iterate though images and add samples
+    #Iterate though list of images and add samples
     samples = []
-    i = 0
     while True:
-        #Read image
-        last_visited = imgs[i]
-        print(f'Adding {n_add} samples from {imgs[i]}')
-        img = Image.open(imgs[i])
-        img = ImageOps.grayscale(img)
-        i += 1
-
-        #Split image into sections
-        w, h = img.size
+        #Select images to scan on each process
         n_cpu = os.cpu_count()
-        if w >= h:
-            pos_shift = [(c.DELTA*i, 0, n_cpu*c.DELTA, c.DELTA)  for i in range(n_cpu)]
-        else:
-            pos_shift = [(0, c.DELTA*i, c.DELTA, n_cpu*c.DELTA) for i in range(n_cpu)]
+        img_list_select = img_list[0:n_cpu]
+        n_add_process = math.ceil(n_add/n_cpu)
 
-        #Multiprocess
-        partial_args = functools.partial(image_scan, models, img, int(n_add/n_cpu))
+        img_process_list = []
+        for img_select in img_list_select:
+            img = Image.open(img_select)
+            img = ImageOps.grayscale(img)
+            img_process_list.append(img)
+
+        #Multiprocess selected images
+        partial_args = functools.partial(image_scan, models, n_add_process)
         with concurrent.futures.ProcessPoolExecutor() as pool:
-            sample_splits = pool.map(partial_args, pos_shift)
+            samples_process_list = list(pool.map(partial_args, img_process_list))
         
-        #Append result from each process
-        for sample_split in sample_splits:
-            for sample in sample_split:
-                samples.append(sample)
+        #Collect samples, if an image returns too few, the image is exhausted: remove from list of images
+        for (img_select, sample_process) in zip(img_list_select, samples_process_list):
+            if len(sample_process) < n_add_process:
+                img_list = [img for img in img_list if not img == img_select]
+        samples += list(itertools.chain.from_iterable(samples_process_list))
+        print(f'Collected {len(samples)}/{n_add_tot} samples...')
 
-        #Terminate if enough samples are appended
-        if len(samples) >= n_add:
+        #Check if enough samples have been added
+        if len(samples) - n_add >= 0:
             break
-        
+        else:
+            n_add -= len(samples)
+            
     #Add negative samples and labels to dataset
     X = np.concatenate((X, samples))
     y = np.concatenate((y, np.array(len(samples)*[0])))
-    return X, y, last_visited
+    print(f'Added {len(samples)} samples.')
+    print(f'{len(img_list)} negative images remain.')
+    return X, y, img_list
 
-def image_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[float]) -> list[np.ndarray]:
-    """Scans through subsection of input image and returns haar-like features if accepted by every layer of models.
+def image_scan(models: list[Model], n_add: int, img: Image) -> list[np.ndarray]:
+    """Scans image and returns haar-like features if accepted by every layer of models.
 
     Args:
         models (list[Model]): List of models for each layer
@@ -305,8 +304,8 @@ def image_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[flo
     w, h = img.size
     size_img = min(w,h)
     samples = []
-    x_pos = pos_shift[0]
-    y_pos = pos_shift[1]
+    x_pos = 0
+    y_pos = 0
 
     #Scan through image
     while size_subwindow <= size_img:
@@ -321,7 +320,7 @@ def image_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[flo
                 subwindow = np.array(subwindow)
                 subwindow_std = np.std(subwindow)
                 if subwindow_std < 1:
-                    x_pos += pos_shift[2]
+                    x_pos += c.DELTA
                     continue
                 subwindow = 255*(subwindow - np.mean(subwindow))/subwindow_std
 
@@ -338,14 +337,18 @@ def image_scan(models: list[Model], img: Image, n_add: int, pos_shift: tuple[flo
                     #Calculate the 162336 haar-like features and append if it passes through all layers
                     elif model == models[-1]:
                         samples.append(haar_like_feature(subwindow_ii, 0, 0, 24, 24))
-                        if len(samples) > n_add:
+                        if len(samples) >= n_add:
                             return samples
 
-                x_pos += pos_shift[2]
-            y_pos += pos_shift[3]
-            x_pos = pos_shift[0]
+                #New column: increment column index
+                x_pos += c.DELTA
+            
+            #New row: increment row index, reset column index
+            y_pos += c.DELTA
+            x_pos = 0
+        
+        #All rows and columns scanned: increment subwindow scale, reset row and column index
         size_subwindow *= c.SCALE
         size_subwindow = int(size_subwindow)
-        x_pos = pos_shift[0]
-        y_pos = pos_shift[1]
+        x_pos, y_pos = 0, 0
     return samples

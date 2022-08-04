@@ -15,32 +15,33 @@ def train():
     
     #Initialize parameters
     n_wc = c.WC_INIT
-    fpr = c.FPR_INIT
     layer_cnt = 0
-    last_visited = None
+    img_list = None
+    fpr_acc = 1
     
     #Fit a model for each layer and save to .pkl file
     models = []
-    with open(c.MODEL_PATH, 'wb') as f:
-        while fpr > c.FPR_TERMINATE:
+    with open(c.MODEL_PATH, 'wb') as m:
+        while fpr_acc > c.FPR_TERMINATE:
             #Fit model and save it to .pkl file
             print(f'-----------------\nLayer {layer_cnt}: Fitting model with {n_wc} WC:s')
-            layer_cnt += 1
-            model = model_fit(X, y, n_wc)
+            model, n_wc = model_fit(X, y, n_wc)
             models.append(model)
-            pickle.dump(model, f)
+            pickle.dump(model, m)
+            print(f'Layer {layer_cnt}: Successfully fitted model with {n_wc} WC:s!')
+            layer_cnt += 1
 
-            #Update number of weak classifiers
-            n_wc = model.clf.n_estimators
-
-            #Delete false negative and true negative samples
-            X, y = samples_del(model, X, y)
-
-            #Add new negative samples if requirements are not met
-            X, y, last_visited = samples_add(models, X, y, last_visited)
-
-            #Update FPR to check for termination criterion
+            #Update accumulated fnr and fpr
             _, fpr = model_error(model, X, y)
+            if len(models) > 1:
+                fpr_acc *= fpr
+            else:
+                fpr_acc = fpr
+            print(f'Accumulated fpr = {fpr_acc:.7f}')
+            
+            #Delete fn and tn samples, then add new fp samples
+            X, y = samples_del(model, X, y)
+            X, y, img_list = samples_add(models, X, y, img_list)
 
 if __name__ == "__main__":
     train()
